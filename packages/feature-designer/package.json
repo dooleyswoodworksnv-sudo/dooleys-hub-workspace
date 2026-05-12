@@ -1,0 +1,28 @@
+{
+  "name": "@dooleys/feature-designer",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/index.tsx",
+  "types": "src/index.tsx",
+  "dependencies": {
+    "@dooleys/ui": "*",
+    "@dooleys/core": "*",
+    "@google/genai": "^1.29.0",
+    "@react-three/csg": "^4.0.0",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "konva": "^10.2.0",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "pdfjs-dist": "^5.5.207",
+    "polygon-clipping": "^0.15.7",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-konva": "^19.2.3",
+    "three": "^0.183.2",
+    "@types/three": "^0.183.1",
+    "use-image": "^1.1.4",
+    "web-ifc": "^0.0.77"
+  }
+}
