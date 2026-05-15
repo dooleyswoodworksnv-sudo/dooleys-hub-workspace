@@ -19,6 +19,16 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
+// Safe wrapper around date-fns format — returns fallback string for Invalid Date
+const safeFormat = (date: Date | null | undefined, fmt: string, fallback = '—') => {
+  try {
+    if (!date || isNaN(date.getTime())) return fallback;
+    return format(date, fmt);
+  } catch {
+    return fallback;
+  }
+};
+
 
 
 export const AVAILABLE_INSPECTIONS = [
@@ -56,14 +66,7 @@ export interface Task {
   drawPct?: number;
 }
 
-export const INITIAL_TASKS: Task[] = [
-  { id: 't1', name: 'Site Prep & Excavation', start: new Date(2026, 4, 1), end: new Date(2026, 4, 15), progress: 100, status: 'completed', inspections: [{ name: 'Temporary Power', status: 'approved' }, { name: 'Health Septic Building Final', status: 'approved' }], drawPct: 0.05 },
-  { id: 't2', name: 'Foundation & Concrete', start: new Date(2026, 4, 16), end: new Date(2026, 5, 10), progress: 60, status: 'on-track', dependencies: ['t1'], inspections: [{ name: 'Footings', status: 'approved' }, { name: 'Stemwalls & Retaining Walls', status: 'pending' }, { name: 'Slab on Grade', status: 'pending' }], drawPct: 0.15 },
-  { id: 't3', name: 'Structural Framing', start: new Date(2026, 5, 12), end: new Date(2026, 6, 20), progress: 0, status: 'pending', dependencies: ['t2'], inspections: [{ name: 'Rough Framing', status: 'pending' }, { name: 'Roof Framing', status: 'pending' }], drawPct: 0.20 },
-  { id: 't4', name: 'MEP Rough-Ins', start: new Date(2026, 6, 15), end: new Date(2026, 7, 30), progress: 0, status: 'delayed', dependencies: ['t3'], inspections: [{ name: 'Rough Electrical', status: 'pending' }, { name: 'Rough Plumbing', status: 'pending' }, { name: 'Rough Mechanical', status: 'pending' }], drawPct: 0.15 },
-  { id: 't5', name: 'Insulation & Drywall', start: new Date(2026, 8, 1), end: new Date(2026, 8, 25), progress: 0, status: 'pending', dependencies: ['t4'], inspections: [{ name: 'Insulation', status: 'pending' }, { name: 'Wallboard', status: 'pending' }], drawPct: 0.15 },
-  { id: 't6', name: 'Interior Finishes', start: new Date(2026, 8, 26), end: new Date(2026, 10, 15), progress: 0, status: 'pending', dependencies: ['t5'], inspections: [{ name: 'Final', status: 'pending' }, { name: 'Certificate of Occupancy', status: 'pending' }], drawPct: 0.25 }
-];
+export const INITIAL_TASKS: Task[] = [];
 
 interface SortableTaskRowProps {
   task: Task;
@@ -123,7 +126,7 @@ function SortableTaskRow({ task, onClick }: SortableTaskRowProps) {
           )}
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-[9px] text-text-muted uppercase tracking-[1px]">{format(task.start, 'MMM d')} - {format(task.end, 'MMM d')}</span>
+          <span className="text-[9px] text-text-muted uppercase tracking-[1px]">{safeFormat(task.start, 'MMM d')} - {safeFormat(task.end, 'MMM d')}</span>
           {hasInspections && anyPending && (
             <span className="text-[9px] text-accent-gold font-bold bg-accent-gold/10 px-1.5 py-0.5 rounded">{pendingInspections} action req.</span>
           )}
@@ -494,7 +497,7 @@ export const GanttChart = ({ tasks, setTasks }: GanttChartProps) => {
       {/* Edit Modal */}
       {editingTask && (
         <div 
-          className="absolute inset-0 bg-black/80 z-50 flex flex-col justify-center items-center p-4"
+          className="fixed inset-0 bg-black/80 z-[100] flex flex-col justify-center items-center p-4"
           onPointerDown={() => setEditingTask(null)}
         >
           <div 
@@ -530,8 +533,12 @@ export const GanttChart = ({ tasks, setTasks }: GanttChartProps) => {
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-[1px] mb-2">Start Date</label>
                   <input 
                     type="date" 
-                    value={format(editingTask.start, 'yyyy-MM-dd')}
-                    onChange={e => setEditingTask({...editingTask, start: parseISO(e.target.value)})}
+                    value={safeFormat(editingTask.start, 'yyyy-MM-dd', '')}
+                    onChange={e => {
+                      if (!e.target.value) return;
+                      const parsed = parseISO(e.target.value);
+                      if (!isNaN(parsed.getTime())) setEditingTask({...editingTask, start: parsed});
+                    }}
                     className="w-full bg-bg-primary border border-white/10 text-white p-2 text-sm focus:border-accent-gold outline-none transition-colors"
                     required
                   />
@@ -540,8 +547,12 @@ export const GanttChart = ({ tasks, setTasks }: GanttChartProps) => {
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-[1px] mb-2">End Date</label>
                   <input 
                     type="date" 
-                    value={format(editingTask.end, 'yyyy-MM-dd')}
-                    onChange={e => setEditingTask({...editingTask, end: parseISO(e.target.value)})}
+                    value={safeFormat(editingTask.end, 'yyyy-MM-dd', '')}
+                    onChange={e => {
+                      if (!e.target.value) return;
+                      const parsed = parseISO(e.target.value);
+                      if (!isNaN(parsed.getTime())) setEditingTask({...editingTask, end: parsed});
+                    }}
                     className="w-full bg-bg-primary border border-white/10 text-white p-2 text-sm focus:border-accent-gold outline-none transition-colors"
                     required
                   />

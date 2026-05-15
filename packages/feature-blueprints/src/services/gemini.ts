@@ -51,6 +51,12 @@ export interface CalibrationData {
 }
 
 import { GoogleGenAI, Type } from '@google/genai';
+import {
+  type BlueprintType,
+  getSystemInstruction,
+  getPrompt,
+  getExplainPrompt,
+} from './prompts';
 
 function getAiClient() {
   const apiKey = localStorage.getItem('gemini_api_key');
@@ -63,12 +69,21 @@ function getAiClient() {
 export async function analyzeBlueprint(
   fileData: string, 
   mimeType: string, 
-  userPrompt?: string
+  userPrompt?: string,
+  blueprintType?: BlueprintType
 ): Promise<BlueprintData> {
   const ai = getAiClient();
   const base64Data = fileData.split(',')[1];
   
-  const prompt = `Analyze this architectural blueprint. ${userPrompt ? `\n\nUser specific instructions: ${userPrompt}` : ''}\n\nIdentify all key elements like rooms, dimensions, doors, windows, and notes. Ensure bounding boxes are accurate percentages (0-100).`;
+  // Build the analysis prompt from the template system
+  const selectedType = blueprintType || 'general';
+  const templatePrompt = getPrompt(selectedType);
+  
+  // If user provided additional instructions, append them
+  let prompt = templatePrompt;
+  if (userPrompt && userPrompt.trim()) {
+    prompt += `\n\nADDITIONAL USER INSTRUCTIONS:\n${userPrompt}`;
+  }
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-pro',
@@ -82,11 +97,12 @@ export async function analyzeBlueprint(
       }
     ],
     config: {
+      systemInstruction: getSystemInstruction(),
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          analysisSummary: { type: Type.STRING, description: 'A detailed paragraph summarizing the overall blueprint' },
+          analysisSummary: { type: Type.STRING, description: 'A detailed paragraph summarizing the overall blueprint, including scale, orientation, and key findings' },
           items: {
             type: Type.ARRAY,
             items: {
@@ -95,8 +111,8 @@ export async function analyzeBlueprint(
                 id: { type: Type.STRING, description: 'A unique identifier for this item' },
                 type: { type: Type.STRING, enum: ['room', 'dimension', 'door_schedule', 'window_schedule', 'general_note', 'other'] },
                 label: { type: Type.STRING, description: 'Short descriptive label' },
-                description: { type: Type.STRING },
-                value: { type: Type.STRING, description: 'Any specific value like a measurement or quantity' },
+                description: { type: Type.STRING, description: 'Detailed description including specifications, sizes, materials' },
+                value: { type: Type.STRING, description: 'Any specific value like a measurement, size, or quantity — transcribe exactly as shown' },
                 boundingBox: {
                   type: Type.OBJECT,
                   properties: {
@@ -107,7 +123,7 @@ export async function analyzeBlueprint(
                   },
                   required: ['xMin', 'yMin', 'xMax', 'yMax']
                 },
-                confidence: { type: Type.NUMBER }
+                confidence: { type: Type.NUMBER, description: 'Confidence score 0-1. Use lower values for hard-to-read or ambiguous elements.' }
               },
               required: ['id', 'type', 'label', 'boundingBox', 'confidence']
             }
@@ -127,11 +143,18 @@ export async function analyzeBlueprint(
 
 export async function explainArchitecturalTerm(term: string, context?: string): Promise<string> {
   const ai = getAiClient();
-  const prompt = `Explain the architectural term "${term}"${context ? ` in the context of: ${context}` : ''}. Keep the explanation clear, concise, and easy to understand for someone reviewing a blueprint.`;
+  
+  const template = getExplainPrompt();
+  const prompt = template
+    .replace('{term}', term)
+    .replace('{context}', context ? ` in the context of: ${context}` : '');
   
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: prompt
+    contents: prompt,
+    config: {
+      systemInstruction: getSystemInstruction(),
+    }
   });
 
   return response.text || 'No explanation generated.';

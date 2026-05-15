@@ -3,6 +3,12 @@ import { Upload, FileText, Download, Play, CheckCircle2, AlertCircle, Loader2, C
 import ReactCrop, { type Crop } from 'react-image-crop';
 import { useBlueprint } from '../context/BlueprintContext';
 import { Button, cn } from '@dooleys/ui';
+import {
+  type BlueprintType,
+  BLUEPRINT_TYPE_LABELS,
+  BLUEPRINT_TYPE_DESCRIPTIONS,
+  setSelectedBlueprintType,
+} from '../services/prompts';
 
 
 
@@ -48,7 +54,7 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
     isAnalyzing, setIsAnalyzing, isProcessingFile, setIsProcessingFile, analyzingProgress, setAnalyzingProgress,
     isAnalyzingRef, isCancelledRef, data, setData, addedItems, setAddedItems, error, setError, copied, setCopied,
     numPages, setNumPages, currentPage, setCurrentPage, analyzeStartPage, setAnalyzeStartPage, analyzeEndPage, setAnalyzeEndPage,
-    pdfDoc, setPdfDoc, customPrompt, setCustomPrompt, searchQuery, setSearchQuery, showSearchResults, setShowSearchResults,
+    pdfDoc, setPdfDoc, customPrompt, setCustomPrompt, blueprintType, setBlueprintType, searchQuery, setSearchQuery, showSearchResults, setShowSearchResults,
     selectedItemId, setSelectedItemId, isFocusMode, setIsFocusMode, isNotationMode, setIsNotationMode, notationStart, setNotationStart,
     notationEnd, setNotationEnd, isMeasurementMode, setIsMeasurementMode, measurementStart, setMeasurementStart, measurementEnd, setMeasurementEnd,
     measurementType, setMeasurementType, measurementPoints, setMeasurementPoints, showMeasurementPopup, setShowMeasurementPopup,
@@ -56,7 +62,7 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
     calibrationScale, setCalibrationScale, currentMeasurement, setCurrentMeasurement, fileHandle, setFileHandle, lastSavedHash, setLastSavedHash,
     lastSavedTime, setLastSavedTime, isAutoSaving, setIsAutoSaving, windowSize, setWindowSize, soundEnabled, setSoundEnabled,
     calibrationPixelDist, setCalibrationPixelDist, guides, setGuides, mousePos, setMousePos, isManualZoomMode, setIsManualZoomMode,
-    isPanMode, setIsPanMode, isFullscreen, setIsFullscreen, isOnlyHighlightedView, setIsOnlyHighlightedView, isDarkMode, setIsDarkMode,
+    isPanMode, setIsPanMode, isFullscreen, setIsFullscreen, isOnlyHighlightedView, setIsOnlyHighlightedView, showBoundingBoxes, setShowBoundingBoxes, isDarkMode, setIsDarkMode,
     activeViewCrop, setActiveViewCrop, zoomLevel, setZoomLevel, isPanning, setIsPanning, panStart, setPanStart, notations, setNotations,
     crop, setCrop, focusImage, setFocusImage, isTranslating, setIsTranslating, targetLanguage, setTargetLanguage, explanationTerm, setExplanationTerm,
     explanationText, setExplanationText, isExplaining, setIsExplaining, showSettings, setShowSettings, apiKeyInput, setApiKeyInput
@@ -110,7 +116,11 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                   setFile(null);
                   setPreview(null);
                   setData(null);
-                  setTimeout(() => fileInputRef.current?.click(), 0);
+                  // Set accept directly on DOM before click to avoid setTimeout breaking user gesture
+                  if (fileInputRef.current) {
+                    fileInputRef.current.accept = 'image/*';
+                    fileInputRef.current.click();
+                  }
                 }}
                 className={cn(
                   "px-4 py-1.5 text-[10px] uppercase font-bold tracking-wider rounded transition-all",
@@ -126,7 +136,11 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                   setFile(null);
                   setPreview(null);
                   setData(null);
-                  setTimeout(() => fileInputRef.current?.click(), 0);
+                  // Set accept directly on DOM before click to avoid setTimeout breaking user gesture
+                  if (fileInputRef.current) {
+                    fileInputRef.current.accept = 'application/pdf';
+                    fileInputRef.current.click();
+                  }
                 }}
                 className={cn(
                   "px-4 py-1.5 text-[10px] uppercase font-bold tracking-wider rounded transition-all",
@@ -447,6 +461,18 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                         <RefreshCcw size={14} /> Calibrate
                       </Button>
                     )}
+                    {data && (
+                      <Button 
+                        variant={showBoundingBoxes ? "primary" : "secondary"}
+                        onClick={(e) => { e.stopPropagation(); setShowBoundingBoxes(!showBoundingBoxes); }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        className="text-[10px] font-bold uppercase tracking-wider h-auto py-2"
+                        title={showBoundingBoxes ? "Hide Bounding Boxes" : "Show Bounding Boxes"}
+                      >
+                        {showBoundingBoxes ? <Eye size={14} /> : <EyeOff size={14} />} Boxes
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
@@ -515,7 +541,7 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                 ref={fileInputRef} 
                 onChange={handleFileChange} 
                 className="hidden" 
-                accept={uploadMode === 'image' ? "image/*" : uploadMode === 'pdf' ? "application/pdf" : "application/json,.json"}
+                accept={uploadMode === 'image' ? "image/*" : uploadMode === 'pdf' ? "application/pdf" : "application/json,.json,image/*,application/pdf"}
               />
               {isProcessingFile ? (
                 <div className="flex flex-col items-center gap-4">
@@ -585,7 +611,7 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                             />
 
                             {/* Blueprint Items Overlay */}
-                            {data?.items?.map((item) => {
+                            {showBoundingBoxes && data?.items?.map((item) => {
                               if (item.page && item.page !== currentPage) return null;
 
                               const isSelected = selectedItemId === item.id;
@@ -982,7 +1008,7 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                 </div>
               )}
 
-              <div className="flex flex-col md:flex-row items-center justify-end gap-6 p-8 bg-surface border border-ink/10 rounded-3xl shadow-sm">
+              <div className="flex flex-col md:flex-row items-stretch justify-end gap-6 p-8 bg-surface border border-ink/10 rounded-3xl shadow-sm">
                 {file && (
                   <div className="flex flex-col items-end gap-4 w-full md:w-auto">
                     {uploadMode === 'pdf' && pdfDoc && (
@@ -1030,6 +1056,44 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                         <p className="text-[9px] uppercase tracking-widest opacity-40 font-bold">Total PDF Pages: {pdfDoc.numPages}</p>
                       </div>
                     )}
+                    {/* Blueprint Type Selector */}
+                    <div className="w-full">
+                      <label className="block text-[10px] uppercase tracking-widest font-bold opacity-50 mb-2">Blueprint Type</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(Object.keys(BLUEPRINT_TYPE_LABELS) as BlueprintType[]).map(type => (
+                          <button
+                            key={type}
+                            onClick={() => {
+                              setBlueprintType(type);
+                              setSelectedBlueprintType(type);
+                            }}
+                            className={cn(
+                              "px-2.5 py-1 rounded-lg text-[9px] uppercase font-bold tracking-wider border transition-all",
+                              blueprintType === type 
+                                ? "bg-emerald-500/10 border-emerald-500 text-emerald-600" 
+                                : "border-ink/10 opacity-40 hover:opacity-100"
+                            )}
+                            title={BLUEPRINT_TYPE_DESCRIPTIONS[type]}
+                          >
+                            {BLUEPRINT_TYPE_LABELS[type]}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[9px] opacity-30 mt-1 italic">{BLUEPRINT_TYPE_DESCRIPTIONS[blueprintType]}</p>
+                    </div>
+
+                    {/* Custom Prompt Input */}
+                    <div className="w-full">
+                      <label className="block text-[10px] uppercase tracking-widest font-bold opacity-50 mb-2">Additional Instructions (optional)</label>
+                      <textarea
+                        value={customPrompt}
+                        onChange={(e) => setCustomPrompt(e.target.value)}
+                        placeholder="e.g., Focus on framing callouts only, or: Ignore the title block..."
+                        className="w-full bg-ink/5 border border-ink/10 rounded-lg p-3 text-xs font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-500/30 resize-y placeholder:text-ink/20"
+                        rows={2}
+                      />
+                    </div>
+
                     <div className="flex gap-2">
                       <button 
                         onClick={handleAnalyze}

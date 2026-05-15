@@ -74,16 +74,9 @@ import { BudgetModule, type BudgetItem, type ChangeOrder } from './components/Bu
 
 
 
-const INITIAL_BUDGET_ITEMS: BudgetItem[] = [
-  { id: 'b1', name: 'Cabinets & Vanities', budgeted: 45000, actual: 45000 },
-  { id: 'b2', name: 'Hardwood Flooring', budgeted: 28000, actual: 32500 },
-  { id: 'b3', name: 'Appliance Package', budgeted: 35000, actual: 32000 },
-  { id: 'b4', name: 'Plumbing Fixtures', budgeted: 18000, actual: 18000 },
-];
+const INITIAL_BUDGET_ITEMS: BudgetItem[] = [];
 
-const INITIAL_CHANGE_ORDERS: ChangeOrder[] = [
-  { id: 'co1', description: 'Added exterior lighting package', amount: 4500, status: 'approved' },
-];
+const INITIAL_CHANGE_ORDERS: ChangeOrder[] = [];
 
 type DefinitionLevel = 1 | 2 | 3 | 4 | 5;
 
@@ -107,11 +100,7 @@ interface DailyLogEntry {
   content: string;
 }
 
-const INITIAL_SUBCONTRACTORS: Subcontractor[] = [
-  { id: 'sub-1', name: 'Apex Framing Co.', trade: 'Structural Framing', taskIdMatches: ['t3'], coiStatus: 'valid', permitStatus: 'missing', complianceDocs: [] },
-  { id: 'sub-2', name: 'Velocity MEP', trade: 'MEP Rough-Ins', taskIdMatches: ['t4'], coiStatus: 'expired', permitStatus: 'valid', complianceDocs: [] },
-  { id: 'sub-3', name: 'Elite Finishes', trade: 'Interior Finishes', taskIdMatches: ['t6'], coiStatus: 'valid', permitStatus: 'valid', complianceDocs: [] }
-];
+const INITIAL_SUBCONTRACTORS: Subcontractor[] = [];
 
 interface Issue {
   id: string;
@@ -209,37 +198,7 @@ const LEVEL_DESCRIPTIONS: Record<DefinitionLevel, string> = {
   5: "Incomplete or Poor",
 };
 
-const MOCK_FILE_CONTENTS: Record<string, any> = {
-  "Finishes_Schedule_V1.pdf": {
-    title: "Project Finishes Schedule",
-    type: "Schedule",
-    data: [
-      { area: "Kitchen", material: "Italian Calacatta Borghini Marble", status: "Selected", lead_time: "14 Weeks" },
-      { area: "Great Room", material: "White Oak Wide Plank (Engineered)", status: "Pending Quote", lead_time: "8 Weeks" },
-      { area: "Master Bath", material: "Matte Texture 24x48 Porcelain Tile", status: "In Approval", lead_time: "6 Weeks" },
-      { area: "Exterior", material: "Vertical Cedar Siding + Blackened Steel", status: "Ordered", lead_time: "12 Weeks" },
-    ]
-  },
-  "Civil_Utility_Routing.dwg": {
-    title: "Site Utility Routing Plan",
-    type: "Drawing",
-    content: "CAD Layout showing 400A Service entry from East Setback. Primary water main requires 36\" trench depth. Sewer tie-in at NW corner of lot 4B."
-  },
-  "HVAC_Specs_Rev2.pdf": {
-    title: "Mechanical System Specifications",
-    type: "Packet",
-    data: [
-      { unit: "Main Level", load: "4.5 Ton High Efficiency", filter: "MERV 13", zone: "A1-A4" },
-      { unit: "Guest Wing", load: "2.0 Ton Multi-split", filter: "Standard", zone: "B1-B2" },
-      { unit: "Basement", load: "Humidification Integrated", filter: "MERV 11", zone: "C1" },
-    ]
-  },
-  "Geotech_Report_Final.pdf": {
-    title: "Geotechnical Engineering Report",
-    type: "Report",
-    content: "Soil Bearing Capacity: 1500 psf. Native sandy-clay mixture. Recommend Slab-on-grade with localized piers at deck intersections. No significant ground water depth detected within 12ft."
-  }
-};
+const MOCK_FILE_CONTENTS: Record<string, any> = {};
 
 interface SortablePDRIElementProps {
   el: PDRIElement;
@@ -345,19 +304,11 @@ export default function App({ onPMChange }: PMAppProps = {}) {
   const { designConfig, currentProject, setCurrentProject } = useProject();
 
   const [elements, setElements] = useState<PDRIElement[]>(CRITICAL_ELEMENTS);
-  const [scores, setScores] = useState<Record<string, DefinitionLevel>>({
-    E10: 3, D6: 4, G1: 5, C3: 2, E12: 5
-  });
+  const [scores, setScores] = useState<Record<string, DefinitionLevel>>({});
 
   const [fileStorage, setFileStorage] = useState<Record<string, File>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [attachments, setAttachments] = useState<Record<string, string[]>>({
-    E10: ["Finishes_Schedule_V1.pdf"],
-    D6: ["Civil_Utility_Routing.dwg"],
-    G1: ["HVAC_Specs_Rev2.pdf"],
-    C3: ["Geotech_Report_Final.pdf"],
-    E12: []
-  });
+  const [attachments, setAttachments] = useState<Record<string, string[]>>({});
 
   const [activeElementId, setActiveElementId] = useState<string | null>(CRITICAL_ELEMENTS[0].id);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
@@ -366,9 +317,7 @@ export default function App({ onPMChange }: PMAppProps = {}) {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isVisualizationOpen, setIsVisualizationOpen] = useState(false);
 
-  const [issues, setIssues] = useState<Record<string, Issue[]>>({
-    G1: [{ id: 'iss-1', title: 'HVAC vs Structural Framing Clash in Zone A', assignee: 'Jane Smith', dueDate: '2026-05-15', status: 'open', clashIds: ['el-duct-1', 'el-beam-1'] }]
-  });
+  const [issues, setIssues] = useState<Record<string, Issue[]>>({});
   const [newIssue, setNewIssue] = useState<Partial<Issue>>({ title: '', assignee: '', dueDate: '' });
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
 
@@ -381,7 +330,7 @@ export default function App({ onPMChange }: PMAppProps = {}) {
   const [subcontractors, setSubcontractors] = useState<Subcontractor[]>(INITIAL_SUBCONTRACTORS);
 
   // Budget & Allowances
-  const [baseContractPrice, setBaseContractPrice] = useState<number>(2500000);
+  const [baseContractPrice, setBaseContractPrice] = useState<number>(0);
   const [budgetItems, setBudgetItems] = useState<BudgetItem[]>(INITIAL_BUDGET_ITEMS);
   const [changeOrders, setChangeOrders] = useState<ChangeOrder[]>(INITIAL_CHANGE_ORDERS);
 

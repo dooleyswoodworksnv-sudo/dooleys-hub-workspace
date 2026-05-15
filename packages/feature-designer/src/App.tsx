@@ -11,6 +11,7 @@ import { generateSketchUpCode, GenerationSection } from './utils/sketchupGenerat
 import { analyzeBlueprint } from './services/aiService';
 import { Loader2, Sparkles, Link2, Unlink } from 'lucide-react';
 import { sanitize } from './utils/math';
+import { computeEstimate } from './utils/computeEstimate';
 import { AssetManager } from './components/AssetManager';
 
 export interface BumpoutConfig {
@@ -1544,57 +1545,22 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
   useEffect(() => {
     if (!onDesignChange) return;
 
-    // Compute simplified material estimate from currentState
-    const s = currentState;
-    const w = s.widthFt * 12 + s.widthInches;
-    const l = s.lengthFt * 12 + s.lengthInches;
-    const wallHt = s.wallHeightFt + s.wallHeightInches / 12;
-    const perimeterIn = (w + l) * 2;
-    const perimeterFt = perimeterIn / 12;
-    const extWallAreaSqFt = perimeterFt * wallHt;
-    const prices = s.materialCosts || DEFAULT_MATERIAL_COSTS;
-
-    // Compute key quantities
-    const studs = Math.ceil(perimeterIn / s.studSpacing) + 20;
-    const plates = Math.ceil(perimeterFt * (s.bottomPlates + s.topPlates) / 8);
-    const sheathingSheets = (s.addSheathing || s.solidWallsOnly) ? Math.ceil(extWallAreaSqFt / 32) : 0;
-    const drywallSheets = (s.addDrywall || s.solidWallsOnly) ? Math.ceil((extWallAreaSqFt * 2) / 32) : 0;
-    const insulationRolls = (s.addInsulation || s.solidWallsOnly) ? Math.ceil(extWallAreaSqFt / 40) : 0;
-    const concreteCy = s.foundationType !== 'none' ? ((w * l / 144) * (s.slabThicknessIn / 12)) / 27 : 0;
-    const floorJoists = s.addFloorFraming ? Math.ceil((s.joistDirection === 'y' ? l : w) / s.joistSpacing) : 0;
-    const subfloorSheets = (s.addFloorFraming && s.addSubfloor) ? Math.ceil((w * l / 144) / 32) : 0;
-    const roofTrusses = (s.roofParts.length > 0 || s.trussRuns.length > 0) ? Math.ceil((s.lengthFt * 12) / s.trussSpacing) + 1 : 0;
-    const pitchFactor = Math.sqrt(1 + Math.pow(s.roofPitch / 12, 2));
-    const roofAreaSqFt = (s.widthFt + 2 * (s.roofOverhangIn / 12)) * (s.lengthFt + 2 * (s.roofOverhangIn / 12)) * pitchFactor;
-    const roofSheathingSheets = roofTrusses > 0 ? Math.ceil(roofAreaSqFt / 32) : 0;
-
-    const lineItems: { category: string; name: string; quantity: number; unit: string; unitCost: number; totalCost: number }[] = [
-      { category: 'Foundation', name: 'Concrete', quantity: +concreteCy.toFixed(1), unit: 'cy', unitCost: prices.concrete, totalCost: concreteCy * prices.concrete },
-      { category: 'Floor System', name: 'Floor Joists', quantity: floorJoists, unit: 'ea', unitCost: prices.joist, totalCost: floorJoists * prices.joist },
-      { category: 'Floor System', name: 'Subfloor Sheets', quantity: subfloorSheets, unit: 'sheets', unitCost: prices.subfloor, totalCost: subfloorSheets * prices.subfloor },
-      { category: 'Walls', name: 'Wall Studs', quantity: studs, unit: 'ea', unitCost: prices.stud, totalCost: studs * prices.stud },
-      { category: 'Walls', name: 'Plates', quantity: plates, unit: 'ea', unitCost: prices.plate, totalCost: plates * prices.plate },
-      { category: 'Walls', name: 'Sheathing', quantity: sheathingSheets, unit: 'sheets', unitCost: prices.sheathing, totalCost: sheathingSheets * prices.sheathing },
-      { category: 'Walls', name: 'Drywall', quantity: drywallSheets, unit: 'sheets', unitCost: prices.drywall, totalCost: drywallSheets * prices.drywall },
-      { category: 'Walls', name: 'Insulation', quantity: insulationRolls, unit: 'rolls', unitCost: prices.insulation, totalCost: insulationRolls * prices.insulation },
-      { category: 'Roof', name: 'Roof Trusses', quantity: roofTrusses, unit: 'ea', unitCost: prices.truss, totalCost: roofTrusses * prices.truss },
-      { category: 'Roof', name: 'Roof Sheathing', quantity: roofSheathingSheets, unit: 'sheets', unitCost: prices.roofSheathing, totalCost: roofSheathingSheets * prices.roofSheathing },
-      { category: 'Windows & Doors', name: 'Doors', quantity: s.doors.length, unit: 'ea', unitCost: prices.door, totalCost: s.doors.length * prices.door },
-      { category: 'Windows & Doors', name: 'Windows', quantity: s.windows.length, unit: 'ea', unitCost: prices.window, totalCost: s.windows.length * prices.window },
-    ].filter(item => item.quantity > 0);
-
-    const totalCost = lineItems.reduce((sum, item) => sum + item.totalCost, 0);
+    // Use the shared computeEstimate to match the MaterialsEstimate UI exactly
+    const estimate = computeEstimate(currentState, getWallLength, getAvailableWallOptions);
 
     onDesignChange({
-      widthFt: s.widthFt,
-      lengthFt: s.lengthFt,
-      wallHeightFt: s.wallHeightFt,
-      stories: 1 + s.additionalStories,
-      roofType: s.roofType,
-      roofPitch: s.roofPitch,
-      materialEstimate: { totalCost, lineItems },
+      widthFt: currentState.widthFt,
+      lengthFt: currentState.lengthFt,
+      wallHeightFt: currentState.wallHeightFt,
+      stories: 1 + currentState.additionalStories,
+      roofType: currentState.roofType,
+      roofPitch: currentState.roofPitch,
+      materialEstimate: {
+        totalCost: estimate.totalCost,
+        lineItems: estimate.lineItems,
+      },
     });
-  }, [currentState, onDesignChange]);
+  }, [currentState, onDesignChange, getWallLength, getAvailableWallOptions]);
 
   const [past, setPast] = useState<AppState[]>([]);
   const [future, setFuture] = useState<AppState[]>([]);

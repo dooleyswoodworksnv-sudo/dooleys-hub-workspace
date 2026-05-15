@@ -7,6 +7,26 @@ import { motion, AnimatePresence } from 'motion/react';
 import ReactCrop, { type Crop, centerCrop, makeAspectCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { analyzeBlueprint, translateBlueprintData, explainArchitecturalTerm, BlueprintData, Notation, CalibrationData, Guide, BlueprintItem } from './services/gemini';
+import {
+  type BlueprintType,
+  BLUEPRINT_TYPE_LABELS,
+  BLUEPRINT_TYPE_DESCRIPTIONS,
+  getSystemInstruction,
+  setSystemInstruction,
+  getPrompt,
+  setPrompt,
+  getExplainPrompt,
+  setExplainPrompt,
+  resetPrompt,
+  resetSystemInstruction,
+  resetAllPrompts,
+  isPromptCustomized,
+  isSystemInstructionCustomized,
+  setSelectedBlueprintType,
+  DEFAULT_SYSTEM_INSTRUCTION,
+  DEFAULT_PROMPTS,
+  DEFAULT_EXPLAIN_PROMPT,
+} from './services/prompts';
 import { Button, cn } from '@dooleys/ui';
 import { useProject } from '@dooleys/core';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -42,7 +62,7 @@ const MAX_PROJECT_FILE_DATA_LENGTH = 75 * 1024 * 1024;
 
 function AppContent() {
   const state = useBlueprint();
-  const { uploadMode, setUploadMode, file, setFile, preview, setPreview, originalFileData, setOriginalFileData, isAnalyzing, setIsAnalyzing, isProcessingFile, setIsProcessingFile, analyzingProgress, setAnalyzingProgress, isAnalyzingRef, isCancelledRef, data, setData, addedItems, setAddedItems, error, setError, copied, setCopied, numPages, setNumPages, currentPage, setCurrentPage, analyzeStartPage, setAnalyzeStartPage, analyzeEndPage, setAnalyzeEndPage, pdfDoc, setPdfDoc, customPrompt, setCustomPrompt, searchQuery, setSearchQuery, showSearchResults, setShowSearchResults, selectedItemId, setSelectedItemId, isFocusMode, setIsFocusMode, isNotationMode, setIsNotationMode, notationStart, setNotationStart, notationEnd, setNotationEnd, isMeasurementMode, setIsMeasurementMode, measurementStart, setMeasurementStart, measurementEnd, setMeasurementEnd, measurementType, setMeasurementType, measurementPoints, setMeasurementPoints, showMeasurementPopup, setShowMeasurementPopup, measurementLength, setMeasurementLength, measurementInches, setMeasurementInches, calibrationUnit, setCalibrationUnit, calibrationScale, setCalibrationScale, currentMeasurement, setCurrentMeasurement, fileHandle, setFileHandle, lastSavedHash, setLastSavedHash, lastSavedTime, setLastSavedTime, isAutoSaving, setIsAutoSaving, windowSize, setWindowSize, soundEnabled, setSoundEnabled, calibrationPixelDist, setCalibrationPixelDist, guides, setGuides, mousePos, setMousePos, isManualZoomMode, setIsManualZoomMode, isPanMode, setIsPanMode, isFullscreen, setIsFullscreen, isOnlyHighlightedView, setIsOnlyHighlightedView, isDarkMode, setIsDarkMode, activeViewCrop, setActiveViewCrop, zoomLevel, setZoomLevel, isPanning, setIsPanning, panStart, setPanStart, notations, setNotations, crop, setCrop, focusImage, setFocusImage, isTranslating, setIsTranslating, targetLanguage, setTargetLanguage, explanationTerm, setExplanationTerm, explanationText, setExplanationText, isExplaining, setIsExplaining, showSettings, setShowSettings, apiKeyInput, setApiKeyInput } = state;
+  const { uploadMode, setUploadMode, file, setFile, preview, setPreview, originalFileData, setOriginalFileData, isAnalyzing, setIsAnalyzing, isProcessingFile, setIsProcessingFile, analyzingProgress, setAnalyzingProgress, isAnalyzingRef, isCancelledRef, data, setData, addedItems, setAddedItems, error, setError, copied, setCopied, numPages, setNumPages, currentPage, setCurrentPage, analyzeStartPage, setAnalyzeStartPage, analyzeEndPage, setAnalyzeEndPage, pdfDoc, setPdfDoc, customPrompt, setCustomPrompt, blueprintType, setBlueprintType, searchQuery, setSearchQuery, showSearchResults, setShowSearchResults, selectedItemId, setSelectedItemId, isFocusMode, setIsFocusMode, isNotationMode, setIsNotationMode, notationStart, setNotationStart, notationEnd, setNotationEnd, isMeasurementMode, setIsMeasurementMode, measurementStart, setMeasurementStart, measurementEnd, setMeasurementEnd, measurementType, setMeasurementType, measurementPoints, setMeasurementPoints, showMeasurementPopup, setShowMeasurementPopup, measurementLength, setMeasurementLength, measurementInches, setMeasurementInches, calibrationUnit, setCalibrationUnit, calibrationScale, setCalibrationScale, currentMeasurement, setCurrentMeasurement, fileHandle, setFileHandle, lastSavedHash, setLastSavedHash, lastSavedTime, setLastSavedTime, isAutoSaving, setIsAutoSaving, windowSize, setWindowSize, soundEnabled, setSoundEnabled, calibrationPixelDist, setCalibrationPixelDist, guides, setGuides, mousePos, setMousePos, isManualZoomMode, setIsManualZoomMode, isPanMode, setIsPanMode, isFullscreen, setIsFullscreen, isOnlyHighlightedView, setIsOnlyHighlightedView, isDarkMode, setIsDarkMode, activeViewCrop, setActiveViewCrop, zoomLevel, setZoomLevel, isPanning, setIsPanning, panStart, setPanStart, notations, setNotations, crop, setCrop, focusImage, setFocusImage, isTranslating, setIsTranslating, targetLanguage, setTargetLanguage, explanationTerm, setExplanationTerm, explanationText, setExplanationText, isExplaining, setIsExplaining, showSettings, setShowSettings, apiKeyInput, setApiKeyInput } = state;
   type HistoryState = {
     notations: Notation[];
     guides: Guide[];
@@ -532,6 +552,13 @@ function AppContent() {
         return;
       }
 
+      // Auto-detect and set the correct upload mode based on actual file type
+      if (isPdf) {
+        setUploadMode('pdf');
+      } else {
+        setUploadMode('image');
+      }
+
       setFile(selectedFile);
       setPreview(null);
       setData(null);
@@ -749,7 +776,7 @@ function AppContent() {
           setAnalyzingProgress(`Analyzing page ${i} of ${end}...`);
           const pageDataUrl = await getPdfPageDataUrl(pdfDoc, i);
           if (pageDataUrl) {
-            const result = await analyzeBlueprint(pageDataUrl, 'image/png', finalPrompt);
+            const result = await analyzeBlueprint(pageDataUrl, 'image/png', finalPrompt, blueprintType);
             const itemsWithPage = result.items.map(item => ({ ...item, id: `${item.id}-page-${i}`, page: i }));
             newItems.push(...itemsWithPage);
             newSummaries.push(`Page ${i}: ${result.analysisSummary}`);
@@ -787,7 +814,7 @@ function AppContent() {
         }
 
         setAnalyzingProgress('Analyzing image...');
-        const result = await analyzeBlueprint(preview, 'image/png', finalPrompt);
+        const result = await analyzeBlueprint(preview, 'image/png', finalPrompt, blueprintType);
         if (!isCancelledRef.current) {
           setData({
             ...result,
@@ -1076,16 +1103,34 @@ function AppContent() {
     if (selectedItemId && data?.items && imgRef.current) {
       const item = data.items.find(i => i.id === selectedItemId);
       if (item) {
-        // Add some padding around the bounding box
-        const padding = 5; // 5% padding
+        // Add generous padding around the bounding box
+        const padding = 10; // 10% padding on each side
         
-        const xMin = Math.max(0, item.boundingBox.xMin - padding);
-        const yMin = Math.max(0, item.boundingBox.yMin - padding);
-        const xMax = Math.min(100, item.boundingBox.xMax + padding);
-        const yMax = Math.min(100, item.boundingBox.yMax + padding);
+        let xMin = Math.max(0, item.boundingBox.xMin - padding);
+        let yMin = Math.max(0, item.boundingBox.yMin - padding);
+        let xMax = Math.min(100, item.boundingBox.xMax + padding);
+        let yMax = Math.min(100, item.boundingBox.yMax + padding);
         
-        const width = xMax - xMin;
-        const height = yMax - yMin;
+        let width = xMax - xMin;
+        let height = yMax - yMin;
+        
+        // Enforce a minimum crop size so we never zoom in too far
+        // (at least 45% of the blueprint in each dimension)
+        const minSize = 45;
+        if (width < minSize) {
+          const centerX = (xMin + xMax) / 2;
+          xMin = Math.max(0, centerX - minSize / 2);
+          xMax = Math.min(100, xMin + minSize);
+          xMin = Math.max(0, xMax - minSize); // re-adjust if clamped on the right
+          width = xMax - xMin;
+        }
+        if (height < minSize) {
+          const centerY = (yMin + yMax) / 2;
+          yMin = Math.max(0, centerY - minSize / 2);
+          yMax = Math.min(100, yMin + minSize);
+          yMin = Math.max(0, yMax - minSize); // re-adjust if clamped on the bottom
+          height = yMax - yMin;
+        }
         
         setActiveViewCrop({
           unit: '%',
@@ -1601,65 +1646,17 @@ function AppContent() {
           </div>
         </header>
 
-        {/* API Key Settings Modal */}
+        {/* API Key & Prompt Template Settings Modal */}
         <AnimatePresence>
           {showSettings && (
-            <div className="fixed inset-0 bg-ink/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                className="bg-paper p-6 rounded-2xl shadow-xl max-w-md w-full border border-ink/10 relative"
-              >
-                <button 
-                  onClick={() => setShowSettings(false)}
-                  className="absolute top-4 right-4 p-2 rounded-full hover:bg-ink/5 transition-colors"
-                >
-                  <X size={20} />
-                </button>
-                <h2 className="font-serif italic text-2xl mb-2 flex items-center gap-2">
-                  <Key size={24} className="opacity-50" />
-                  API Settings
-                </h2>
-                <p className="text-sm opacity-70 mb-6">
-                  To use the AI features (Analysis, Translation, Explanations), you need a Google Gemini API Key. This key is stored locally in your browser and is never sent to our servers.
-                </p>
-                
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs uppercase tracking-widest font-bold opacity-50 mb-2">Gemini API Key</label>
-                    <input 
-                      type="password"
-                      value={apiKeyInput}
-                      onChange={(e) => setApiKeyInput(e.target.value)}
-                      placeholder="AIzaSy..."
-                      className="w-full bg-ink/5 border border-ink/10 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-ink/20"
-                    />
-                  </div>
-                  <div className="flex justify-end gap-3 pt-4">
-                    <button 
-                      onClick={() => setShowSettings(false)}
-                      className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-ink/5 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      onClick={() => {
-                        if (apiKeyInput.trim()) {
-                          localStorage.setItem('gemini_api_key', apiKeyInput.trim());
-                        } else {
-                          localStorage.removeItem('gemini_api_key');
-                        }
-                        setShowSettings(false);
-                      }}
-                      className="px-4 py-2 bg-ink text-paper rounded-lg text-sm font-medium hover:bg-ink/90 transition-colors"
-                    >
-                      Save Key
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            </div>
+            <SettingsModal
+              showSettings={showSettings}
+              setShowSettings={setShowSettings}
+              apiKeyInput={apiKeyInput}
+              setApiKeyInput={setApiKeyInput}
+              blueprintType={blueprintType}
+              setBlueprintType={setBlueprintType}
+            />
           )}
         </AnimatePresence>
 
@@ -1923,6 +1920,323 @@ function AppContent() {
       )}
     </div>
     </>
+  );
+}
+
+// ─── Settings Modal Component ───
+function SettingsModal({
+  showSettings,
+  setShowSettings,
+  apiKeyInput,
+  setApiKeyInput,
+  blueprintType,
+  setBlueprintType,
+}: {
+  showSettings: boolean;
+  setShowSettings: (v: boolean) => void;
+  apiKeyInput: string;
+  setApiKeyInput: (v: string) => void;
+  blueprintType: BlueprintType;
+  setBlueprintType: (v: BlueprintType) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<'api' | 'prompts' | 'system' | 'explain'>('api');
+  const [editingType, setEditingType] = useState<BlueprintType>(blueprintType);
+  const [promptDraft, setPromptDraft] = useState(() => getPrompt(blueprintType));
+  const [systemDraft, setSystemDraft] = useState(() => getSystemInstruction());
+  const [explainDraft, setExplainDraft] = useState(() => getExplainPrompt());
+  const [saveFlash, setSaveFlash] = useState<string | null>(null);
+
+  const flash = (msg: string) => {
+    setSaveFlash(msg);
+    setTimeout(() => setSaveFlash(null), 2000);
+  };
+
+  const handleTypeChange = (type: BlueprintType) => {
+    setEditingType(type);
+    setPromptDraft(getPrompt(type));
+  };
+
+  const tabs = [
+    { id: 'api' as const, label: 'API Key' },
+    { id: 'prompts' as const, label: 'Prompt Templates' },
+    { id: 'system' as const, label: 'System Instruction' },
+    { id: 'explain' as const, label: 'Explain Prompt' },
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-ink/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className="bg-paper rounded-2xl shadow-xl max-w-3xl w-full border border-ink/10 relative flex flex-col"
+        style={{ maxHeight: '85vh' }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 pb-0">
+          <h2 className="font-serif italic text-2xl flex items-center gap-2">
+            <Key size={24} className="opacity-50" />
+            AI Settings
+          </h2>
+          <button 
+            onClick={() => setShowSettings(false)}
+            className="p-2 rounded-full hover:bg-ink/5 transition-colors"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-1 px-6 pt-4 border-b border-ink/10">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                "px-4 py-2.5 text-[11px] uppercase font-bold tracking-wider rounded-t-lg transition-all border-b-2 -mb-px",
+                activeTab === tab.id 
+                  ? "border-emerald-500 text-emerald-600 bg-emerald-500/5" 
+                  : "border-transparent opacity-50 hover:opacity-100"
+              )}
+            >
+              {tab.label}
+              {tab.id === 'system' && isSystemInstructionCustomized() && (
+                <span className="ml-1.5 w-1.5 h-1.5 bg-amber-500 rounded-full inline-block" title="Customized" />
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Save Flash */}
+        <AnimatePresence>
+          {saveFlash && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="mx-6 mt-3 px-4 py-2 bg-emerald-500/10 text-emerald-600 rounded-lg text-sm font-bold flex items-center gap-2"
+            >
+              <CheckCircle2 size={16} />
+              {saveFlash}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+
+          {/* ─── API Key Tab ─── */}
+          {activeTab === 'api' && (
+            <div className="space-y-4">
+              <p className="text-sm opacity-70">
+                To use the AI features (Analysis, Translation, Explanations), you need a Google Gemini API Key. This key is stored locally in your browser and is never sent to our servers.
+              </p>
+              <div>
+                <label className="block text-xs uppercase tracking-widest font-bold opacity-50 mb-2">Gemini API Key</label>
+                <input 
+                  type="password"
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="w-full bg-ink/5 border border-ink/10 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-ink/20"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button 
+                  onClick={() => setShowSettings(false)}
+                  className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-ink/5 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    if (apiKeyInput.trim()) {
+                      localStorage.setItem('gemini_api_key', apiKeyInput.trim());
+                    } else {
+                      localStorage.removeItem('gemini_api_key');
+                    }
+                    flash('API Key saved');
+                  }}
+                  className="px-4 py-2 bg-ink text-paper rounded-lg text-sm font-medium hover:bg-ink/90 transition-colors"
+                >
+                  Save Key
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ─── Prompt Templates Tab ─── */}
+          {activeTab === 'prompts' && (
+            <div className="space-y-4">
+              <p className="text-sm opacity-70">
+                Choose a blueprint type to see and edit its extraction prompt. The AI uses this to know exactly what to look for.
+              </p>
+
+              {/* Type Selector */}
+              <div className="flex flex-wrap gap-2">
+                {(Object.keys(BLUEPRINT_TYPE_LABELS) as BlueprintType[]).map(type => (
+                  <button
+                    key={type}
+                    onClick={() => handleTypeChange(type)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-[10px] uppercase font-bold tracking-wider border transition-all relative",
+                      editingType === type 
+                        ? "bg-emerald-500/10 border-emerald-500 text-emerald-600" 
+                        : "border-ink/10 opacity-50 hover:opacity-100"
+                    )}
+                  >
+                    {BLUEPRINT_TYPE_LABELS[type]}
+                    {isPromptCustomized(type) && (
+                      <span className="absolute -top-1 -right-1 w-2 h-2 bg-amber-500 rounded-full" title="Customized" />
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {/* Description */}
+              <p className="text-xs opacity-40 italic">
+                {BLUEPRINT_TYPE_DESCRIPTIONS[editingType]}
+              </p>
+
+              {/* Prompt Editor */}
+              <div className="relative">
+                <textarea
+                  value={promptDraft}
+                  onChange={(e) => setPromptDraft(e.target.value)}
+                  className="w-full bg-ink/5 border border-ink/10 rounded-lg p-4 text-sm font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-500/30 resize-y"
+                  rows={14}
+                  spellCheck={false}
+                />
+                <div className="absolute bottom-3 right-3 text-[10px] font-mono opacity-30">
+                  {promptDraft.length} chars
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex justify-between items-center">
+                <button
+                  onClick={() => {
+                    resetPrompt(editingType);
+                    setPromptDraft(DEFAULT_PROMPTS[editingType]);
+                    flash(`Reset "${BLUEPRINT_TYPE_LABELS[editingType]}" to default`);
+                  }}
+                  className="text-xs text-red-500 hover:text-red-600 font-bold uppercase tracking-wider transition-colors"
+                >
+                  Reset to Default
+                </button>
+                <button
+                  onClick={() => {
+                    setPrompt(editingType, promptDraft);
+                    flash(`Saved "${BLUEPRINT_TYPE_LABELS[editingType]}" prompt`);
+                  }}
+                  className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700 transition-colors"
+                >
+                  Save Prompt
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ─── System Instruction Tab ─── */}
+          {activeTab === 'system' && (
+            <div className="space-y-4">
+              <p className="text-sm opacity-70">
+                The system instruction defines the AI's persona and expertise. It's sent with every API call to set the context for analysis.
+              </p>
+              <textarea
+                value={systemDraft}
+                onChange={(e) => setSystemDraft(e.target.value)}
+                className="w-full bg-ink/5 border border-ink/10 rounded-lg p-4 text-sm font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-500/30 resize-y"
+                rows={14}
+                spellCheck={false}
+              />
+              <div className="flex justify-between items-center">
+                <button
+                  onClick={() => {
+                    resetSystemInstruction();
+                    setSystemDraft(DEFAULT_SYSTEM_INSTRUCTION);
+                    flash('Reset system instruction to default');
+                  }}
+                  className="text-xs text-red-500 hover:text-red-600 font-bold uppercase tracking-wider transition-colors"
+                >
+                  Reset to Default
+                </button>
+                <button
+                  onClick={() => {
+                    setSystemInstruction(systemDraft);
+                    flash('System instruction saved');
+                  }}
+                  className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700 transition-colors"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ─── Explain Prompt Tab ─── */}
+          {activeTab === 'explain' && (
+            <div className="space-y-4">
+              <p className="text-sm opacity-70">
+                This prompt is used when you click "Explain" on an extracted term. Use <code className="bg-ink/5 px-1 rounded text-xs">{'{term}'}</code> and <code className="bg-ink/5 px-1 rounded text-xs">{'{context}'}</code> as placeholders.
+              </p>
+              <textarea
+                value={explainDraft}
+                onChange={(e) => setExplainDraft(e.target.value)}
+                className="w-full bg-ink/5 border border-ink/10 rounded-lg p-4 text-sm font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-500/30 resize-y"
+                rows={10}
+                spellCheck={false}
+              />
+              <div className="flex justify-between items-center">
+                <button
+                  onClick={() => {
+                    setExplainPrompt(DEFAULT_EXPLAIN_PROMPT);
+                    setExplainDraft(DEFAULT_EXPLAIN_PROMPT);
+                    flash('Reset explain prompt to default');
+                  }}
+                  className="text-xs text-red-500 hover:text-red-600 font-bold uppercase tracking-wider transition-colors"
+                >
+                  Reset to Default
+                </button>
+                <button
+                  onClick={() => {
+                    setExplainPrompt(explainDraft);
+                    flash('Explain prompt saved');
+                  }}
+                  className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700 transition-colors"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="border-t border-ink/10 px-6 py-4 flex items-center justify-between">
+          <button
+            onClick={() => {
+              if (confirm('Reset ALL prompts, system instruction, and explain prompt to defaults?')) {
+                resetAllPrompts();
+                setSystemDraft(DEFAULT_SYSTEM_INSTRUCTION);
+                setPromptDraft(DEFAULT_PROMPTS[editingType]);
+                setExplainDraft(DEFAULT_EXPLAIN_PROMPT);
+                flash('All prompts reset to defaults');
+              }
+            }}
+            className="text-xs text-red-500/70 hover:text-red-600 font-bold uppercase tracking-wider transition-colors"
+          >
+            Reset Everything
+          </button>
+          <button
+            onClick={() => setShowSettings(false)}
+            className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-ink/5 transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </motion.div>
+    </div>
   );
 }
 

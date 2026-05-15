@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useRef, useEffect } from 'r
 import { type Crop } from 'react-image-crop';
 import * as pdfjsLib from 'pdfjs-dist';
 import { BlueprintData, Notation, CalibrationData, Guide, BlueprintItem } from '../services/gemini';
+import { type BlueprintType, getSelectedBlueprintType } from '../services/prompts';
 
 export type ProjectFileHandle = {
   createWritable: () => Promise<{
@@ -12,7 +13,7 @@ export type ProjectFileHandle = {
 };
 
 export const useBlueprintState = () => {
-  const [uploadMode, setUploadMode] = useState<'image' | 'pdf' | 'project'>('project');
+  const [uploadMode, setUploadMode] = useState<'image' | 'pdf' | 'project'>('pdf');
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [originalFileData, setOriginalFileData] = useState<string | null>(null);
@@ -31,6 +32,7 @@ export const useBlueprintState = () => {
   const [analyzeEndPage, setAnalyzeEndPage] = useState<number>(1);
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [customPrompt, setCustomPrompt] = useState('');
+  const [blueprintType, setBlueprintType] = useState<BlueprintType>(() => getSelectedBlueprintType());
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -62,6 +64,7 @@ export const useBlueprintState = () => {
   const [isPanMode, setIsPanMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isOnlyHighlightedView, setIsOnlyHighlightedView] = useState(false);
+  const [showBoundingBoxes, setShowBoundingBoxes] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [activeViewCrop, setActiveViewCrop] = useState<Crop | null>(null);
   const [zoomLevel, setZoomLevel] = useState('Fit to Screen');
@@ -115,6 +118,8 @@ export const useBlueprintState = () => {
     setPdfDoc,
     customPrompt,
     setCustomPrompt,
+    blueprintType,
+    setBlueprintType,
     searchQuery,
     setSearchQuery,
     showSearchResults,
@@ -177,6 +182,8 @@ export const useBlueprintState = () => {
     setIsFullscreen,
     isOnlyHighlightedView,
     setIsOnlyHighlightedView,
+    showBoundingBoxes,
+    setShowBoundingBoxes,
     isDarkMode,
     setIsDarkMode,
     activeViewCrop,
