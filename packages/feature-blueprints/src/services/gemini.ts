@@ -16,6 +16,10 @@ export interface BlueprintItem {
 
 export interface BlueprintData {
   analysisSummary: string;
+  sheetTitle?: string;
+  sheetNumber?: string;
+  /** Per-page title block info, keyed by page number */
+  pageMeta?: Record<number, { sheetTitle?: string; sheetNumber?: string }>;
   items: BlueprintItem[];
 }
 
@@ -103,6 +107,8 @@ export async function analyzeBlueprint(
         type: Type.OBJECT,
         properties: {
           analysisSummary: { type: Type.STRING, description: 'A detailed paragraph summarizing the overall blueprint, including scale, orientation, and key findings' },
+          sheetTitle: { type: Type.STRING, description: 'The sheet title from the title block (e.g., "GENERAL FOUNDATION DETAILS", "FLOOR PLAN", "ROOF FRAMING PLAN"). Look in the title block area, typically bottom-right corner of the drawing.' },
+          sheetNumber: { type: Type.STRING, description: 'The sheet number/identifier from the title block (e.g., "S001", "A2.1", "M-101"). Look in the title block area, typically in a prominent box.' },
           items: {
             type: Type.ARRAY,
             items: {
@@ -129,7 +135,7 @@ export async function analyzeBlueprint(
             }
           }
         },
-        required: ['analysisSummary', 'items']
+        required: ['analysisSummary', 'sheetTitle', 'sheetNumber', 'items']
       }
     }
   });

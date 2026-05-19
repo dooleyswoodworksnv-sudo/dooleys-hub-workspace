@@ -6,17 +6,10 @@ import path from 'path';
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
-    port: 3050,
+    port: 3020,
     fs: {
       // Allow serving files from the monorepo root (needed for pdfjs worker in node_modules)
       allow: [path.resolve(__dirname, '../..')]
-    },
-    proxy: {
-      // Forward /api/* requests to the asset server (Designer Materials Library)
-      '/api': {
-        target: 'http://localhost:3060',
-        changeOrigin: true,
-      }
     }
   },
   optimizeDeps: {

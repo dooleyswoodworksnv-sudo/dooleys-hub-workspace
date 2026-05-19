@@ -427,6 +427,8 @@ export interface AppState {
   shapeBlocks: { id: string, x: number, y: number, w: number, h: number }[];
   materialCosts: MaterialCosts;
   roofGroups: RoofGroup[];
+  // Per-surface painted materials — tracks texture URL, area in sq ft, and detected finish type
+  paintedSurfaces: Record<string, { url: string; areaSqFt: number; finishType: string }>;
 }
 
 const DEFAULT_APP_STATE: AppState = {
@@ -488,6 +490,7 @@ const DEFAULT_APP_STATE: AppState = {
   addDrywall: true,
   drywallThickness: 0.5,
   wallFinishes: {},
+  paintedSurfaces: {},
   roofFinish: 'none' as RoofFinish,
   interiorFinish: 'none' as InteriorFinish,
   foundationFinish: 'none' as FoundationFinish,
@@ -777,6 +780,7 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
   const [addDrywall, setAddDrywall] = useState<boolean>(true);
   const [drywallThickness, setDrywallThickness] = useState<number>(0.5);
   const [wallFinishes, setWallFinishes] = useState<Record<number, 'none' | 'wood-siding' | 'vinyl-siding' | 'hardie-board' | 'brick' | 'stucco'>>({});
+  const [paintedSurfaces, setPaintedSurfaces] = useState<Record<string, { url: string; areaSqFt: number; finishType: string }>>({});
   const [roofFinish, setRoofFinish] = useState<RoofFinish>('none');
   const [interiorFinish, setInteriorFinish] = useState<InteriorFinish>('none');
   const [foundationFinish, setFoundationFinish] = useState<FoundationFinish>('none');
@@ -1516,7 +1520,7 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     combinedBlocks, shapeBlocks, materialCosts,
     roofType, roofPitch, roofOverhangIn, trussSpacing, trussType, customTrussScript, roofSheathingThickness,
     roofWidthIn, roofHeightIn, selectedRoofPartId,
-    roofParts, trussRuns, dormers, customCameras, roofGroups
+    roofParts, trussRuns, dormers, customCameras, roofGroups, paintedSurfaces
   }), [
     shape, widthFt, widthInches, lengthFt, lengthInches,
     lRightDepthFt, lRightDepthInches, lBackWidthFt, lBackWidthInches,
@@ -1538,7 +1542,7 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     combinedBlocks, shapeBlocks, materialCosts,
     roofType, roofPitch, roofOverhangIn, trussSpacing, trussType, customTrussScript, roofSheathingThickness,
     roofWidthIn, roofHeightIn, selectedRoofPartId,
-    roofParts, trussRuns, dormers, customCameras, roofGroups
+    roofParts, trussRuns, dormers, customCameras, roofGroups, paintedSurfaces
   ]);
 
   // ── Bridge: sync design data to shared ProjectContext ──
@@ -1605,6 +1609,7 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     setAddDrywall(state.addDrywall ?? true);
     setDrywallThickness(state.drywallThickness ?? 0.5);
     setWallFinishes(state.wallFinishes || {});
+    setPaintedSurfaces(state.paintedSurfaces || {});
     setRoofFinish(state.roofFinish || 'none');
     setInteriorFinish(state.interiorFinish || 'none');
     setFoundationFinish(state.foundationFinish || 'none');
@@ -8873,6 +8878,12 @@ className="w-20 px-2 py-1 bg-white dark:bg-[#0f1424] border border-zinc-200 dark
                 lDirection={lDirection}
                 customCameras={customCameras}
                 setCustomCameras={setCustomCameras}
+                onSurfacePainted={(surfaceId, textureUrl, areaSqFt, finishType) => {
+                  setPaintedSurfaces(prev => ({
+                    ...prev,
+                    [surfaceId]: { url: textureUrl, areaSqFt, finishType }
+                  }));
+                }}
               />
             )}
 

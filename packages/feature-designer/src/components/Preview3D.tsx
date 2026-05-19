@@ -97,10 +97,10 @@ interface Preview3DProps {
   lDirection?: 'front-left' | 'front-right' | 'back-right' | 'back-left';
   customCameras?: CustomCamera[];
   setCustomCameras?: React.Dispatch<React.SetStateAction<CustomCamera[]>>;
-  // Material Painter
+  // Material Painter — callback includes area and auto-detected finish type
   appliedMaterials?: Record<string, string>;
   activePaintMaterial?: string | null;
-  onSurfacePainted?: (surfaceId: string, textureUrl: string) => void;
+  onSurfacePainted?: (surfaceId: string, textureUrl: string, areaSqFt: number, finishType: string) => void;
 }
 
 
@@ -1354,10 +1354,36 @@ export default function Preview3D({
   const activeMaterials = Object.keys(appliedMaterialsProp).length ? appliedMaterialsProp : localAppliedMaterials;
   const activePaint = activePaintMaterialProp ?? localActivePaint;
 
+  // Ref to hold computed surface areas — populated after walls memo
+  const surfaceAreasRef = useRef<Record<string, number>>({});
+
+  const detectFinishType = (url: string): string => {
+    const lower = decodeURIComponent(url).toLowerCase();
+    if (/brick/i.test(lower)) return 'brick';
+    if (/stucco|plaster/i.test(lower)) return 'stucco';
+    if (/vinyl/i.test(lower)) return 'vinyl-siding';
+    if (/hardie|fiber.?cement|cement.?board/i.test(lower)) return 'hardie-board';
+    if (/wood|siding|cedar|plank|clapboard|shingle|shake|decking|timber|lumber|lap/i.test(lower)) return 'wood-siding';
+    if (/metal|steel|corrugated|standing.?seam/i.test(lower)) return 'metal-standing-seam';
+    if (/stone|slate|limestone|granite|fieldstone/i.test(lower)) return 'stone-veneer';
+    if (/tile|ceramic|porcelain|terra.?cotta/i.test(lower)) return 'tile';
+    if (/paint|coat/i.test(lower)) return 'paint';
+    if (/concrete|cmu|block/i.test(lower)) return 'concrete';
+    // Fallback: use generic "custom" for unknown materials
+    return 'custom-texture';
+  };
+
   const handleSurfacePainted = (surfaceId: string, url: string) => {
     const next = { ...activeMaterials, [surfaceId]: url };
     setLocalAppliedMaterials(next);
-    if (onSurfacePainted) onSurfacePainted(surfaceId, url);
+
+    // Compute the area of the painted surface (sq ft)
+    const areaSqFt = surfaceAreasRef.current[surfaceId] || 0;
+    const finishType = detectFinishType(url);
+
+    if (onSurfacePainted) {
+      onSurfacePainted(surfaceId, url, areaSqFt, finishType);
+    }
   };
 
 
@@ -1916,6 +1942,33 @@ export default function Preview3D({
 
     return { wallList, framingList };
   }, [shape, widthIn, lengthIn, thicknessIn, lRightDepthIn, lBackWidthIn, uWallsIn, exteriorWalls, interiorWalls, bumpouts, wallHeightIn, totalBaseHeight, addSheathing, sheathingThickness, addInsulation, insulationThickness, addDrywall, drywallThickness, additionalStories, upperFloorWallHeightIn, upperFloorJoistSize, addSubfloor, subfloorThickness, currentFloorIndex, solidWallsOnly, studSpacing, studThickness, bottomPlates, topPlates, headerType, headerHeight, doors, windows]);
+
+  // ── Compute surface areas for each paintable surface ──────────────────
+  // This runs after the walls memo and populates surfaceAreasRef
+  // so handleSurfacePainted can look up the area when a surface is clicked.
+  useEffect(() => {
+    const areas: Record<string, number> = {};
+    walls.wallList.forEach((w, i) => {
+      const isExt = w.color === "#e4e4e7" || w.color === "#c4a484";
+      const isDrywall = w.color === "#ffffff";
+      const surfaceId = isExt ? `ext-wall-${i}` : isDrywall ? `drywall-${i}` : `int-wall-${i}`;
+      // Painted face area = length × height  (the larger of w/d is the length, smaller is thickness)
+      const faceArea = Math.max(w.w, w.d) * w.h / 144; // sq in → sq ft
+      areas[surfaceId] = Math.round(faceArea * 100) / 100;
+    });
+    // Foundation surfaces (stem walls, slab edges)
+    if (foundationType !== 'none' && stemWallHeightIn > 0) {
+      const perimeterIn = (widthIn + lengthIn) * 2; // simplified for rectangle
+      const foundAreaSqFt = (perimeterIn * stemWallHeightIn) / 144;
+      areas['foundation'] = Math.round(foundAreaSqFt * 100) / 100;
+    }
+    // Ground/floor area
+    const floorAreaSqFt = (widthIn * lengthIn) / 144;
+    areas['ground'] = Math.round(floorAreaSqFt * 100) / 100;
+    areas['floor'] = Math.round(floorAreaSqFt * 100) / 100;
+
+    surfaceAreasRef.current = areas;
+  }, [walls, foundationType, stemWallHeightIn, widthIn, lengthIn]);
 
   const roofs = useMemo(() => {
     const totalWallHeight = wallHeightIn + (additionalStories * upperFloorWallHeightIn);

@@ -16,6 +16,8 @@ export interface EstimateResult {
   interiorFinishName: string;
   foundationFinishCostKey: string | null;
   foundationFinishName: string;
+  // Per-surface painted material breakdown for the estimate UI
+  paintedSurfaceItems: { surfaceId: string; label: string; finishType: string; areaSqFt: number }[];
 }
 
 export function computeEstimate(
@@ -119,26 +121,43 @@ export function computeEstimate(
   const headersLengthIn = state.doors.reduce((sum, d) => sum + d.widthIn, 0) + state.windows.reduce((sum, ww) => sum + ww.widthIn, 0);
   const headersLF = Math.ceil(headersLengthIn / 12);
 
-  // Exterior Finishes
+  // Exterior Finishes — from painted surfaces (3D Material Editor) + dropdown fallback
   let woodSidingQty = 0;
   let vinylSidingQty = 0;
   let hardieBoardQty = 0;
   let brickQty = 0;
   let stuccoQty = 0;
 
-  const extWalls = getAvailableWallOptions.filter(o => !o.label.startsWith('Int'));
-  extWalls.forEach(wall => {
-    const finish = state.wallFinishes?.[wall.id];
-    if (finish && finish !== 'none') {
-      const lengthIn = getWallLength(wall.id);
-      const areaSqFt = (lengthIn / 12) * wallHeightFt;
-      if (finish === 'wood-siding') woodSidingQty += areaSqFt;
-      else if (finish === 'vinyl-siding') vinylSidingQty += areaSqFt;
-      else if (finish === 'hardie-board') hardieBoardQty += areaSqFt;
-      else if (finish === 'brick') brickQty += areaSqFt;
-      else if (finish === 'stucco') stuccoQty += areaSqFt;
-    }
-  });
+  // Primary: sum areas from painted surfaces (per-surface tracking from 3D view)
+  const paintedSurfaces = state.paintedSurfaces || {};
+  const hasPaintedSurfaces = Object.keys(paintedSurfaces).length > 0;
+
+  if (hasPaintedSurfaces) {
+    Object.values(paintedSurfaces).forEach(({ areaSqFt, finishType }) => {
+      if (finishType === 'wood-siding') woodSidingQty += areaSqFt;
+      else if (finishType === 'vinyl-siding') vinylSidingQty += areaSqFt;
+      else if (finishType === 'hardie-board') hardieBoardQty += areaSqFt;
+      else if (finishType === 'brick') brickQty += areaSqFt;
+      else if (finishType === 'stucco') stuccoQty += areaSqFt;
+    });
+  }
+
+  // Fallback: if no surfaces were painted, use dropdown-based per-wall finish assignments
+  if (!hasPaintedSurfaces) {
+    const extWalls = getAvailableWallOptions.filter(o => !o.label.startsWith('Int'));
+    extWalls.forEach(wall => {
+      const finish = state.wallFinishes?.[wall.id];
+      if (finish && finish !== 'none') {
+        const lengthIn = getWallLength(wall.id);
+        const areaSqFt = (lengthIn / 12) * wallHeightFt;
+        if (finish === 'wood-siding') woodSidingQty += areaSqFt;
+        else if (finish === 'vinyl-siding') vinylSidingQty += areaSqFt;
+        else if (finish === 'hardie-board') hardieBoardQty += areaSqFt;
+        else if (finish === 'brick') brickQty += areaSqFt;
+        else if (finish === 'stucco') stuccoQty += areaSqFt;
+      }
+    });
+  }
 
   woodSidingQty = Math.ceil(woodSidingQty);
   vinylSidingQty = Math.ceil(vinylSidingQty);
@@ -267,6 +286,35 @@ export function computeEstimate(
     ...(foundationFinishCostKey && foundationFinishSqFt > 0 ? [{ category: 'Surface Finishes', name: foundationFinishNameMap[state.foundationFinish] || 'Foundation Finish', quantity: foundationFinishSqFt, unit: 'sqft', unitCost: prices[foundationFinishCostKey], totalCost: costs.foundationFinish }] : []),
   ].filter(item => item.quantity > 0);
 
+  // Build per-surface breakdown for the estimate UI
+  const surfaceLabel = (id: string): string => {
+    if (id.startsWith('ext-wall-')) return `Ext Wall Face #${parseInt(id.replace('ext-wall-','')) + 1}`;
+    if (id.startsWith('int-wall-')) return `Int Wall Face #${parseInt(id.replace('int-wall-','')) + 1}`;
+    if (id.startsWith('drywall-')) return `Drywall Face #${parseInt(id.replace('drywall-','')) + 1}`;
+    if (id === 'foundation') return 'Foundation';
+    if (id === 'ground') return 'Ground';
+    if (id === 'floor') return 'Floor';
+    if (id.startsWith('roof-')) return `Roof Face (${id})`;
+    return id;
+  };
+
+  const finishDisplayName = (ft: string): string => {
+    const map: Record<string, string> = {
+      'wood-siding': 'Wood Siding', 'vinyl-siding': 'Vinyl Siding', 'hardie-board': 'Hardie Board',
+      'brick': 'Brick', 'stucco': 'Stucco', 'metal-standing-seam': 'Metal (Standing Seam)',
+      'stone-veneer': 'Stone Veneer', 'tile': 'Tile', 'paint': 'Paint', 'concrete': 'Concrete',
+      'custom-texture': 'Custom Texture'
+    };
+    return map[ft] || ft;
+  };
+
+  const paintedSurfaceItems = Object.entries(paintedSurfaces).map(([surfaceId, { areaSqFt, finishType }]) => ({
+    surfaceId,
+    label: surfaceLabel(surfaceId),
+    finishType: finishDisplayName(finishType),
+    areaSqFt: Math.ceil(areaSqFt),
+  }));
+
   return {
     quantities: {
       studs: totalStuds, plates: totalPlates, sheathing: sheathingSheets,
@@ -291,5 +339,6 @@ export function computeEstimate(
     interiorFinishName: interiorFinishNameMap[state.interiorFinish] || '',
     foundationFinishCostKey: foundationFinishCostKey as string | null,
     foundationFinishName: foundationFinishNameMap[state.foundationFinish] || '',
+    paintedSurfaceItems,
   };
 }

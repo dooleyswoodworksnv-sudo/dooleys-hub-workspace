@@ -1,10 +1,9 @@
-﻿import React, { useRef, useState, useMemo, Suspense } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useState, useMemo, Suspense, Component } from 'react';
+import { Canvas, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Box, Cylinder, Edges, Html, useGLTF, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import { MapPin } from 'lucide-react';
 import { cn } from '@dooleys/ui';
-
 
 
 interface Issue {
@@ -37,28 +36,77 @@ interface BimViewerProps {
   bcfImportStatus?: string | null;
 }
 
+interface BimElementProps {
+  position: [number, number, number];
+  rotation: [number, number, number];
+  isClashing: boolean;
+  onClick: (e: ThreeEvent<MouseEvent>) => void;
+  onPointerOver: (e: ThreeEvent<PointerEvent>) => void;
+  onPointerOut: (e: ThreeEvent<PointerEvent>) => void;
+  children?: React.ReactNode;
+}
+
+// --- Error Boundary for GLTF loading failures ---
+interface ModelErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ModelErrorBoundary extends Component<
+  { children: React.ReactNode },
+  ModelErrorBoundaryState
+> {
+  state: ModelErrorBoundaryState = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Html center>
+          <div className="bg-red-900/80 px-5 py-3 border border-red-500/40 text-white text-xs whitespace-nowrap uppercase tracking-widest font-bold flex flex-col items-center gap-1">
+            <span>Failed to load model</span>
+            <span className="text-[9px] text-red-300 normal-case tracking-normal font-normal max-w-[240px] truncate">
+              {this.state.error?.message ?? 'Unknown error'}
+            </span>
+          </div>
+        </Html>
+      );
+    }
+    return this.state.children;
+  }
+}
+
 function LoadedModel({ url, isPinningMode, onModelClick }: { url: string; isPinningMode?: boolean; onModelClick?: (pos: [number, number, number]) => void }) {
   const { scene } = useGLTF(url);
+  // Clone the scene to avoid Three.js "object can only have one parent" errors
+  // when the component remounts or is rendered more than once.
+  const clonedScene = useMemo(() => scene.clone(true), [scene]);
   return (
     <primitive 
-      object={scene} 
-      onClick={(e: any) => {
+      object={clonedScene} 
+      onClick={(e: ThreeEvent<MouseEvent>) => {
         if (isPinningMode && onModelClick) {
           e.stopPropagation();
           onModelClick([e.point.x, e.point.y, e.point.z]);
         }
       }}
-      onPointerOver={(e: any) => {
-        if (isPinningMode) document.body.style.cursor = 'crosshair';
-      }}
-      onPointerOut={(e: any) => {
-        if (isPinningMode) document.body.style.cursor = 'default';
-      }}
     />
   );
 }
 
-const Duct = ({ position, rotation, isClashing, onClick, onPointerOver, onPointerOut, children }: any) => {
+// --- Static demo elements (module-level constant, no useMemo needed) ---
+const DEFAULT_ELEMENTS = [
+  { id: 'el-beam-1', type: 'beam' as const, position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number] },
+  { id: 'el-duct-1', type: 'duct' as const, position: [0, 1, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number] },
+  { id: 'el-pipe-1', type: 'pipe' as const, position: [0, 0, 0] as [number, number, number], rotation: [0, 0, Math.PI / 2] as [number, number, number] },
+  { id: 'el-beam-2', type: 'beam' as const, position: [2, 0, -2] as [number, number, number], rotation: [0, 0, 0] as [number, number, number] },
+  { id: 'el-duct-2', type: 'duct' as const, position: [0, 0, -2] as [number, number, number], rotation: [0, Math.PI / 2, 0] as [number, number, number] },
+];
+
+const Duct = ({ position, rotation, isClashing, onClick, onPointerOver, onPointerOut, children }: BimElementProps) => {
   return (
     <Box position={position} rotation={rotation} args={[4, 0.4, 0.8]} onClick={onClick} onPointerOver={onPointerOver} onPointerOut={onPointerOut}>
       <meshStandardMaterial color={isClashing ? "#ff5555" : "#888888"} transparent opacity={0.8} />
@@ -68,7 +116,7 @@ const Duct = ({ position, rotation, isClashing, onClick, onPointerOver, onPointe
   );
 };
 
-const Beam = ({ position, rotation, isClashing, onClick, onPointerOver, onPointerOut, children }: any) => {
+const Beam = ({ position, rotation, isClashing, onClick, onPointerOver, onPointerOut, children }: BimElementProps) => {
   return (
     <Box position={position} rotation={rotation} args={[0.5, 4, 0.5]} onClick={onClick} onPointerOver={onPointerOver} onPointerOut={onPointerOut}>
       <meshStandardMaterial color={isClashing ? "#ff5555" : "#6666cc"} transparent opacity={0.8} />
@@ -78,7 +126,7 @@ const Beam = ({ position, rotation, isClashing, onClick, onPointerOver, onPointe
   );
 };
 
-const Pipe = ({ position, rotation, isClashing, onClick, onPointerOver, onPointerOut, children }: any) => {
+const Pipe = ({ position, rotation, isClashing, onClick, onPointerOver, onPointerOut, children }: BimElementProps) => {
   return (
     <Cylinder position={position} rotation={rotation} args={[0.2, 0.2, 5, 16]} onClick={onClick} onPointerOver={onPointerOver} onPointerOut={onPointerOut}>
       <meshStandardMaterial color={isClashing ? "#ff5555" : "#cc6622"} transparent opacity={0.8} />
@@ -89,22 +137,21 @@ const Pipe = ({ position, rotation, isClashing, onClick, onPointerOver, onPointe
 }
 
 export function BimViewer({ issues, onSelectIssue, selectedIssueId, photoPins, onPhotoPinClick, isPinningMode, onModelClick, showPhotoPins = true, modelUrl, pendingPinPosition, bcfImportStatus }: BimViewerProps) {
-  // Let's create a predefined set of elements that represent a basic structure
-  // And we map specific issues to these clashes
-
-  const elements = useMemo(() => [
-    { id: 'el-beam-1', type: 'beam', position: [0, 0, 0], rotation: [0, 0, 0] },
-    { id: 'el-duct-1', type: 'duct', position: [0, 1, 0], rotation: [0, 0, 0] },
-    { id: 'el-pipe-1', type: 'pipe', position: [0, 0, 0], rotation: [0, 0, Math.PI / 2] },
-    { id: 'el-beam-2', type: 'beam', position: [2, 0, -2], rotation: [0, 0, 0] },
-    { id: 'el-duct-2', type: 'duct', position: [0, 0, -2], rotation: [0, Math.PI / 2, 0] },
-  ], []);
-
   const [hoveredElementId, setHoveredElementId] = useState<string | null>(null);
 
-  // Map of elements clashing based on existing issues.
-  // We'll just infer this from issue.clashIds or some mock data if not present.
-  
+  // Build a clash map for O(1) lookups instead of scanning the issues array repeatedly
+  const clashMap = useMemo(() => {
+    const map = new Map<string, Issue[]>();
+    issues.filter(i => i.status !== 'resolved').forEach(issue => {
+      issue.clashIds?.forEach(id => {
+        const existing = map.get(id) || [];
+        existing.push(issue);
+        map.set(id, existing);
+      });
+    });
+    return map;
+  }, [issues]);
+
   const getIsClashing = (elementId: string) => {
     // If an issue is selected, only highlight clashes for that issue
     if (selectedIssueId) {
@@ -115,15 +162,15 @@ export function BimViewer({ issues, onSelectIssue, selectedIssueId, photoPins, o
       return false; // Not clashing for the selected issue
     }
 
-    // Otherwise, highlight all unresolved clashes
-    return issues.some(issue => issue.status !== 'resolved' && issue.clashIds?.includes(elementId));
+    // Otherwise, check the pre-built clash map
+    return clashMap.has(elementId);
   };
 
   const getElementIssue = (elementId: string) => {
-    return issues.find(issue => issue.status !== 'resolved' && issue.clashIds?.includes(elementId));
+    return clashMap.get(elementId)?.[0] ?? null;
   };
   
-  const handleObjectClick = (e: any, elementId: string) => {
+  const handleObjectClick = (e: ThreeEvent<MouseEvent>, elementId: string) => {
     e.stopPropagation();
     
     if (isPinningMode && onModelClick) {
@@ -131,33 +178,27 @@ export function BimViewer({ issues, onSelectIssue, selectedIssueId, photoPins, o
       return;
     }
 
-    // Find an issue associated with this element
-    const matchingIssue = issues.find(issue => issue.status !== 'resolved' && issue.clashIds?.includes(elementId));
-    if (matchingIssue && onSelectIssue) {
-      onSelectIssue(matchingIssue.id);
+    // Find an issue associated with this element via the clash map
+    const clashIssues = clashMap.get(elementId);
+    if (clashIssues?.[0] && onSelectIssue) {
+      onSelectIssue(clashIssues[0].id);
     } else if (onSelectIssue) {
       onSelectIssue(null);
     }
   };
 
-  const handlePointerOver = (e: any, elementId: string) => {
+  const handlePointerOver = (e: ThreeEvent<PointerEvent>, elementId: string) => {
     e.stopPropagation();
-    if (isPinningMode) {
-      document.body.style.cursor = 'crosshair';
-    }
     setHoveredElementId(elementId);
   };
 
-  const handlePointerOut = (e: any) => {
+  const handlePointerOut = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
-    if (isPinningMode) {
-      document.body.style.cursor = 'default';
-    }
     setHoveredElementId(null);
   };
 
   return (
-    <div className={cn("w-full h-full bg-[#2a2a2a]", isPinningMode ? "cursor-crosshair" : "cursor-move")}>
+    <div className={cn("w-full h-full bg-[#2a2a2a] relative", isPinningMode ? "cursor-crosshair" : "cursor-move")}>
       <Canvas 
         camera={{ position: [5, 5, 5], fov: 45 }}
         onPointerMissed={(e) => {
@@ -166,10 +207,9 @@ export function BimViewer({ issues, onSelectIssue, selectedIssueId, photoPins, o
           }
         }}
       >
-        <ambientLight intensity={2} />
-        <directionalLight position={[10, 20, 10]} intensity={3} castShadow />
+        <ambientLight intensity={0.8} />
+        <directionalLight position={[10, 20, 10]} intensity={3} />
         <directionalLight position={[-10, 20, -10]} intensity={1.5} />
-        <pointLight position={[10, 10, 10]} intensity={2} />
         <Environment preset="city" />
         <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
         {!modelUrl && <gridHelper args={[10, 10, '#333333', '#111111']} />}
@@ -191,28 +231,30 @@ export function BimViewer({ issues, onSelectIssue, selectedIssueId, photoPins, o
         </mesh>
         
         {modelUrl ? (
-          <Suspense fallback={<Html center><div className="bg-black/80 px-4 py-2 border border-white/20 text-white text-xs whitespace-nowrap uppercase tracking-widest font-bold">Loading Model...</div></Html>}>
-            <LoadedModel url={modelUrl} isPinningMode={isPinningMode} onModelClick={onModelClick} />
-          </Suspense>
+          <ModelErrorBoundary>
+            <Suspense fallback={<Html center><div className="bg-black/80 px-4 py-2 border border-white/20 text-white text-xs whitespace-nowrap uppercase tracking-widest font-bold">Loading Model...</div></Html>}>
+              <LoadedModel url={modelUrl} isPinningMode={isPinningMode} onModelClick={onModelClick} />
+            </Suspense>
+          </ModelErrorBoundary>
         ) : (
-          elements.map((el) => {
+          DEFAULT_ELEMENTS.map((el) => {
             const isClashing = getIsClashing(el.id);
             const isHovered = hoveredElementId === el.id;
             const matchingIssue = getElementIssue(el.id);
             
-            const props = {
-              position: el.position as [number, number, number],
-              rotation: el.rotation as [number, number, number],
+            const props: BimElementProps = {
+              position: el.position,
+              rotation: el.rotation,
               isClashing,
-              onClick: (e: any) => handleObjectClick(e, el.id),
-              onPointerOver: (e: any) => handlePointerOver(e, el.id),
-              onPointerOut: (e: any) => handlePointerOut(e)
+              onClick: (e) => handleObjectClick(e, el.id),
+              onPointerOver: (e) => handlePointerOver(e, el.id),
+              onPointerOut: (e) => handlePointerOut(e)
             };
             
             const tooltip = isHovered && (
               <Html center distanceFactor={15}>
                 <div className="bg-bg-surface border border-white/20 px-3 py-2 text-white text-xs rounded shadow-2xl whitespace-nowrap pointer-events-none select-none">
-                  <div className="font-bold opacity-70 mb-1 uppercase tracking-wider text-[9px]">{el.type} â€¢ {el.id}</div>
+                  <div className="font-bold opacity-70 mb-1 uppercase tracking-wider text-[9px]">{el.type} • {el.id}</div>
                   {isClashing && matchingIssue ? (
                     <div className="text-red-400 flex items-center gap-2 font-medium">
                       <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
@@ -258,7 +300,11 @@ export function BimViewer({ issues, onSelectIssue, selectedIssueId, photoPins, o
               }}
             >
               <div className="relative">
-                <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-ping"></div>
+                {/* Only animate the selected issue pin to reduce concurrent CSS animations */}
+                <div className={cn(
+                  "absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full",
+                  selectedIssueId === issue.id ? "animate-ping" : "animate-pulse"
+                )}></div>
                 <MapPin className="w-5 h-5 fill-red-500/20" />
               </div>
             </div>

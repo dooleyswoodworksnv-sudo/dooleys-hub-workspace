@@ -688,8 +688,26 @@ export function AssetManager() {
                                                               asset.name.endsWith('.zip') || 
                                                               asset.name.endsWith('.vrmat'));
 
+                                        const canPaint = isImage || isEmblem;
+
+                                        const handleRootDoubleClick = () => {
+                                            if (!canPaint) return;
+                                            window.dispatchEvent(new CustomEvent('dooley:paintTexture', {
+                                                detail: { url: `/api/serve-file?path=${encodeURIComponent(asset.absolutePath)}` }
+                                            }));
+                                        };
+
                                         return (
-                                            <div key={idx} className="flex items-center justify-between p-2 hover:bg-zinc-50 dark:hover:bg-[#1c2240] group transition-colors border-b last:border-b-0 border-zinc-200 dark:border-[#1c2240]">
+                                            <div
+                                                key={idx}
+                                                onDoubleClick={handleRootDoubleClick}
+                                                className={`flex items-center justify-between p-2 group transition-colors border-b last:border-b-0 border-zinc-200 dark:border-[#1c2240] ${
+                                                    canPaint
+                                                        ? 'hover:bg-indigo-50/60 dark:hover:bg-indigo-900/20 cursor-pointer'
+                                                        : 'hover:bg-zinc-50 dark:hover:bg-[#1c2240]'
+                                                }`}
+                                                title={canPaint ? 'Double-click to select for painting' : ''}
+                                            >
                                                 <div className="flex items-center gap-3 overflow-hidden flex-1 min-w-0 pr-2">
                                                     <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-md bg-zinc-100 dark:bg-[#0a0e1a] flex-shrink-0 flex items-center justify-center overflow-hidden border border-zinc-200 dark:border-[#1c2240] shadow-sm relative">
                                                         {(isEmblem || isImage) ? (
@@ -700,6 +718,11 @@ export function AssetManager() {
                                                             />
                                                         ) : (
                                                             <ImageIcon className="w-4 h-4 lg:w-5 lg:h-5 text-zinc-400" />
+                                                        )}
+                                                        {canPaint && (
+                                                            <div className="absolute inset-0 bg-indigo-500/0 group-hover:bg-indigo-500/20 flex items-end justify-end p-0.5 transition-colors">
+                                                                <span className="text-[9px] opacity-0 group-hover:opacity-100 transition-opacity">🎨</span>
+                                                            </div>
                                                         )}
                                                     </div>
                                                     <div className="flex flex-col flex-1 min-w-0">

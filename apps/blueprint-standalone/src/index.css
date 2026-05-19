@@ -1,0 +1,12 @@
+/* Standalone Blueprint Reader — additional overrides */
+/* The main Tailwind + theme tokens are imported via @dooleys/ui/src/styles/globals.css in main.tsx */
+
+body {
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}

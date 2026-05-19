@@ -5,3 +5,7 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Copied PDF.js worker (derived from node_modules, auto-copied by postinstall)
+apps/hub/public/pdf.worker.mjs
+apps/blueprint-standalone/public/pdf.worker.mjs

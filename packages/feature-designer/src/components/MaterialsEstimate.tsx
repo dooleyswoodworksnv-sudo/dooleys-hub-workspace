@@ -20,7 +20,8 @@ export default function MaterialsEstimate({ state, getWallLength, getAvailableWa
     'Walls': true,
     'Roof': true,
     'Windows & Doors': true,
-    'Surface Finishes': true
+    'Surface Finishes': true,
+    'Painted Surfaces': true
   });
 
   const toggleGroup = (title: string) => {
@@ -178,12 +179,12 @@ export default function MaterialsEstimate({ state, getWallLength, getAvailableWa
                 {
                   title: 'Surface Finishes',
                   items: [
-                    // Exterior wall finishes (from per-wall system)
-                    { id: 'woodSiding', name: "Wood Siding (SqFt)", qty: estimate.quantities.woodSiding, active: estimate.quantities.woodSiding > 0 },
-                    { id: 'vinylSiding', name: "Vinyl Siding (SqFt)", qty: estimate.quantities.vinylSiding, active: estimate.quantities.vinylSiding > 0 },
-                    { id: 'hardieBoard', name: "Hardie Board (SqFt)", qty: estimate.quantities.hardieBoard, active: estimate.quantities.hardieBoard > 0 },
-                    { id: 'brick', name: "Brick (SqFt)", qty: estimate.quantities.brick, active: estimate.quantities.brick > 0 },
-                    { id: 'stucco', name: "Stucco (SqFt)", qty: estimate.quantities.stucco, active: estimate.quantities.stucco > 0 },
+                    // Exterior wall finishes (from per-wall system in Walls > Framing > Per-Wall Exterior Finish)
+                    { id: 'woodSiding', name: "Wood Siding (SqFt)", qty: estimate.quantities.woodSiding, active: true },
+                    { id: 'vinylSiding', name: "Vinyl Siding (SqFt)", qty: estimate.quantities.vinylSiding, active: true },
+                    { id: 'hardieBoard', name: "Hardie Board (SqFt)", qty: estimate.quantities.hardieBoard, active: true },
+                    { id: 'brick', name: "Brick (SqFt)", qty: estimate.quantities.brick, active: true },
+                    { id: 'stucco', name: "Stucco (SqFt)", qty: estimate.quantities.stucco, active: true },
                     // Roof finish
                     ...(estimate.roofFinishCostKey ? [{ id: estimate.roofFinishCostKey, name: `${estimate.roofFinishName} (SqFt)`, qty: estimate.quantities.roofFinishSqFt, active: estimate.quantities.roofFinishSqFt > 0 }] : []),
                     // Interior finish
@@ -239,6 +240,34 @@ export default function MaterialsEstimate({ state, getWallLength, getAvailableWa
             </tbody>
           </table>
         </div>
+
+        {/* Per-surface painted material breakdown */}
+        {estimate.paintedSurfaceItems.length > 0 && (
+          <div className="mt-3 border border-indigo-200 dark:border-indigo-800/50 rounded-lg overflow-hidden">
+            <div 
+              className="px-3 py-2 bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-between cursor-pointer hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors"
+              onClick={() => toggleGroup('Painted Surfaces')}
+            >
+              <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                🎨 Painted Surface Breakdown ({estimate.paintedSurfaceItems.length} surfaces)
+              </span>
+              {openGroups['Painted Surfaces'] ? <ChevronDown size={12} className="text-indigo-500" /> : <ChevronRight size={12} className="text-indigo-500" />}
+            </div>
+            {openGroups['Painted Surfaces'] && (
+              <div className="divide-y divide-indigo-100 dark:divide-indigo-900/30">
+                {estimate.paintedSurfaceItems.map((item) => (
+                  <div key={item.surfaceId} className="px-3 py-1.5 flex items-center justify-between bg-white dark:bg-[#0f1424] text-xs">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-medium text-zinc-700 dark:text-zinc-300 truncate">{item.label}</span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-semibold whitespace-nowrap">{item.finishType}</span>
+                    </div>
+                    <span className="font-bold text-zinc-800 dark:text-zinc-200 whitespace-nowrap ml-2">{item.areaSqFt} sqft</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -30,10 +30,12 @@ import {
 import { Button, cn } from '@dooleys/ui';
 import { useProject } from '@dooleys/core';
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
-// Set up PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+// Set up PDF.js worker from the public directory.
+// The worker file is copied to each app's public/ folder (hub + blueprint-standalone).
+// This avoids Vite's /@fs/ URL restrictions that block dynamic Worker() construction
+// and import() fallback when the worker is served from node_modules.
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
 
 
 
@@ -75,6 +77,44 @@ function AppContent() {
 
   // ── Bridge: sync analysis data + images to shared ProjectContext ──
   const { setBlueprintData, blueprintData, currentProject, setCurrentProject } = useProject();
+  const hasHydratedRef = useRef(false);
+
+  // ── Reverse bridge: hydrate local state FROM ProjectContext on hub project load ──
+  useEffect(() => {
+    // Only hydrate once, and only when we have context data but no local data
+    if (hasHydratedRef.current) return;
+    if (!blueprintData) return;
+    if (data || preview) return; // Already have local state — don't overwrite
+
+    hasHydratedRef.current = true;
+
+    // Restore analysis data (summary + items)
+    if (blueprintData.analysisSummary || (blueprintData.items && blueprintData.items.length > 0)) {
+      setData({
+        analysisSummary: blueprintData.analysisSummary || '',
+        items: blueprintData.items.map(item => ({
+          id: item.id,
+          type: item.type,
+          label: item.label,
+          description: item.description,
+          value: item.value,
+          page: item.page,
+          boundingBox: item.boundingBox,
+          confidence: item.confidence,
+        })),
+      });
+    }
+
+    // Restore preview image from saved image data URLs
+    if (blueprintData.imageDataUrls && blueprintData.imageDataUrls.length > 0) {
+      setPreview(blueprintData.imageDataUrls[0]);
+      setUploadMode(blueprintData.imageDataUrls.length > 1 ? 'pdf' : 'image');
+      setNumPages(blueprintData.imageDataUrls.length);
+      setCurrentPage(1);
+    }
+  }, [blueprintData, data, preview]);
+
+  // ── Forward bridge: push analysis data to shared ProjectContext ──
   useEffect(() => {
     if (data) {
       setBlueprintData({
@@ -651,10 +691,16 @@ function AppContent() {
   };
 
   const handlePageChange = (newPage: number) => {
-    if (pdfDoc && newPage >= 1 && newPage <= numPages) {
+    if (newPage < 1 || newPage > numPages) return;
+    if (pdfDoc) {
       setCurrentPage(newPage);
       setPreview(null);
       renderPdfPage(pdfDoc, newPage);
+      setError(null);
+    } else if (blueprintData?.imageDataUrls && newPage <= blueprintData.imageDataUrls.length) {
+      // Loaded from ProjectContext — use pre-rendered page images
+      setCurrentPage(newPage);
+      setPreview(blueprintData.imageDataUrls[newPage - 1]);
       setError(null);
     }
   };
@@ -741,6 +787,7 @@ function AppContent() {
       if (pdfDoc) {
         const newItems: BlueprintItem[] = [];
         const newSummaries: string[] = [];
+        const newPageMeta: Record<number, { sheetTitle?: string; sheetNumber?: string }> = {};
         
         const start = Math.max(1, analyzeStartPage);
         const end = Math.min(pdfDoc.numPages, analyzeEndPage);
@@ -780,6 +827,10 @@ function AppContent() {
             const itemsWithPage = result.items.map(item => ({ ...item, id: `${item.id}-page-${i}`, page: i }));
             newItems.push(...itemsWithPage);
             newSummaries.push(`Page ${i}: ${result.analysisSummary}`);
+            // Capture title block info for this page
+            if (result.sheetTitle || result.sheetNumber) {
+              newPageMeta[i] = { sheetTitle: result.sheetTitle, sheetNumber: result.sheetNumber };
+            }
           }
         }
         
@@ -791,8 +842,12 @@ function AppContent() {
               ? prevData.analysisSummary + `\n\n--- Analysis for Pages ${start}-${end} ---\n` + newSummaries.join('\n\n')
               : newSummaries.join('\n\n');
 
+            // Merge new pageMeta with existing
+            const mergedPageMeta = { ...(prevData?.pageMeta ?? {}), ...newPageMeta };
+
             return {
               analysisSummary: combinedSummary,
+              pageMeta: mergedPageMeta,
               items: [...existingItems, ...newItems]
             };
           });
@@ -816,8 +871,13 @@ function AppContent() {
         setAnalyzingProgress('Analyzing image...');
         const result = await analyzeBlueprint(preview, 'image/png', finalPrompt, blueprintType);
         if (!isCancelledRef.current) {
+          const singlePageMeta: Record<number, { sheetTitle?: string; sheetNumber?: string }> = {};
+          if (result.sheetTitle || result.sheetNumber) {
+            singlePageMeta[currentPage] = { sheetTitle: result.sheetTitle, sheetNumber: result.sheetNumber };
+          }
           setData({
             ...result,
+            pageMeta: singlePageMeta,
             items: result.items.map(item => ({ ...item, page: currentPage }))
           });
         }
