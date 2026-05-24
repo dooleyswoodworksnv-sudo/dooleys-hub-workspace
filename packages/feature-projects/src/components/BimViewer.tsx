@@ -75,7 +75,7 @@ class ModelErrorBoundary extends Component<
         </Html>
       );
     }
-    return this.state.children;
+    return this.props.children;
   }
 }
 

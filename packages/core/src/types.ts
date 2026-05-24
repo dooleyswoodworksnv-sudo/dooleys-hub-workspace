@@ -30,9 +30,15 @@ export interface BlueprintItem {
 
 export interface BlueprintExtraction {
   analysisSummary: string;
+  sheetTitle?: string;
+  sheetNumber?: string;
+  pageMeta?: Record<number, { sheetTitle?: string; sheetNumber?: string }>;
   items: BlueprintItem[];
   /** Base64 data URLs of all loaded blueprint pages, for cross-module sharing */
   imageDataUrls?: string[];
+  notations?: Notation[];
+  guides?: Guide[];
+  calibrationScale?: CalibrationData | null;
 }
 
 export interface Notation {
@@ -107,6 +113,7 @@ export interface DesignConfig {
   floorArea?: number;
   stories?: number;
   materialEstimate?: MaterialEstimate;
+  designerState?: any;
 }
 
 // ─── Project Manager Data (from feature-projects) ───
@@ -142,4 +149,19 @@ export interface SubcontractorData {
   taskIdMatches: string[];
   coiStatus: 'valid' | 'expired' | 'missing';
   permitStatus: 'valid' | 'expired' | 'missing';
+}
+
+export interface ProgressPhotoData {
+  id: string;
+  url: string;
+  date: string;
+  phase: string;
+  location?: [number, number, number];
+  note?: string;
+}
+
+export interface DailyLogData {
+  id: string;
+  date: string;
+  content: string;
 }

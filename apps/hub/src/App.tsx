@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Card, Badge } from '@dooleys/ui';
@@ -8,9 +8,10 @@ import { ProjectModule } from '@dooleys/feature-projects';
 import { DesignerModule } from '@dooleys/feature-designer';
 import { FileText, PenTool, ClipboardCheck, ArrowRight, Layers, DollarSign, Activity, Plus, Save, FolderOpen, Check, AlertTriangle } from 'lucide-react';
 
-// ── Toast notification ──
 function Toast({ message, type, onDone }: { message: string; type: 'success' | 'error' | 'info'; onDone: () => void }) {
-  React.useEffect(() => { const t = setTimeout(onDone, 3000); return () => clearTimeout(t); }, [onDone]);
+  const latestOnDone = React.useRef(onDone);
+  latestOnDone.current = onDone;
+  React.useEffect(() => { const t = setTimeout(() => latestOnDone.current(), 3000); return () => clearTimeout(t); }, []);
   const colors = {
     success: 'border-accent-emerald/40 bg-accent-emerald/10 text-accent-emerald',
     error:   'border-red-400/40 bg-red-400/10 text-red-400',
@@ -26,7 +27,7 @@ function Toast({ message, type, onDone }: { message: string; type: 'success' | '
 }
 
 // ── Confirm dialog ──
-function ConfirmDialog({ title, message, onConfirm, onCancel }: { title: string; message: string; onConfirm: () => void; onCancel: () => void }) {
+function ConfirmDialog({ title, message, confirmText, onConfirm, onCancel }: { title: string; message: string; confirmText: string; onConfirm: () => void; onCancel: () => void }) {
   return (
     <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.15s_ease-out]">
       <div className="bg-bg-secondary border border-border rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl animate-[scaleIn_0.2s_ease-out]">
@@ -48,7 +49,7 @@ function ConfirmDialog({ title, message, onConfirm, onCancel }: { title: string;
             onClick={onConfirm}
             className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-accent-blue hover:bg-accent-blue/80 transition-all"
           >
-            New Project
+            {confirmText}
           </button>
         </div>
       </div>
@@ -60,12 +61,11 @@ function Dashboard() {
   const {
     blueprintData, designConfig, tasks, budgetItems, changeOrders, subcontractors,
     currentProject, setCurrentProject,
-    isDirty, saveToFile, loadFromFile, resetProject,
+    isDirty, projectFileName, saveToFile, loadFromFile, resetProject,
   } = useProject();
 
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingAction, setPendingAction] = useState<'new' | 'load' | null>(null);
 
   const blueprintItemCount = blueprintData?.items?.length ?? 0;
   const roomCount = blueprintData?.items?.filter(i => i.type === 'room').length ?? 0;
@@ -94,44 +94,50 @@ function Dashboard() {
   const handleNewProject = useCallback(() => {
     const hasData = currentProject?.name || blueprintItemCount > 0 || taskCount > 0 || materialCost > 0;
     if (hasData && isDirty) {
-      setShowConfirm(true);
+      setPendingAction('new');
     } else {
       resetProject();
       setToast({ message: 'New project created', type: 'success' });
     }
   }, [currentProject, blueprintItemCount, taskCount, materialCost, isDirty, resetProject]);
 
-  const handleConfirmNew = useCallback(() => {
-    setShowConfirm(false);
-    resetProject();
-    setToast({ message: 'New project created', type: 'success' });
-  }, [resetProject]);
+  const handleConfirmPending = useCallback(async () => {
+    if (pendingAction === 'new') {
+      resetProject();
+      setToast({ message: 'New project created', type: 'success' });
+    } else if (pendingAction === 'load') {
+      try {
+        await loadFromFile();
+        setToast({ message: 'Project loaded', type: 'success' });
+      } catch (err: any) {
+        setToast({ message: err?.message || 'Failed to load project file', type: 'error' });
+      }
+    }
+    setPendingAction(null);
+  }, [pendingAction, resetProject, loadFromFile]);
 
-  const handleSaveProject = useCallback(() => {
+  const handleSaveProject = useCallback(async () => {
     try {
-      saveToFile();
-      setToast({ message: `Project saved as ${(currentProject?.name || 'untitled').trim()}-project.json`, type: 'success' });
+      await saveToFile();
+      setToast({ message: projectFileName ? `Project updated: ${projectFileName}` : 'Project saved', type: 'success' });
     } catch {
       setToast({ message: 'Failed to save project file', type: 'error' });
     }
-  }, [saveToFile, currentProject]);
+  }, [saveToFile, projectFileName]);
 
-  const handleLoadProject = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
-  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      await loadFromFile(file);
-      setToast({ message: `Loaded project from ${file.name}`, type: 'success' });
-    } catch (err: any) {
-      setToast({ message: err?.message || 'Failed to load project file', type: 'error' });
+  const handleLoadProject = useCallback(async () => {
+    const hasData = currentProject?.name || blueprintItemCount > 0 || taskCount > 0 || materialCost > 0;
+    if (hasData && isDirty) {
+      setPendingAction('load');
+    } else {
+      try {
+        await loadFromFile();
+        setToast({ message: 'Project loaded', type: 'success' });
+      } catch (err: any) {
+        if (err?.message) setToast({ message: err.message, type: 'error' });
+      }
     }
-    // Reset the input so the same file can be re-selected
-    e.target.value = '';
-  }, [loadFromFile]);
+  }, [currentProject, blueprintItemCount, taskCount, materialCost, isDirty, loadFromFile]);
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
@@ -139,32 +145,30 @@ function Dashboard() {
       {toast && <Toast message={toast.message} type={toast.type} onDone={() => setToast(null)} />}
 
       {/* Confirm dialog */}
-      {showConfirm && (
+      {pendingAction && (
         <ConfirmDialog
           title="Unsaved Changes"
-          message="You have unsaved changes. Starting a new project will discard all current data. Would you like to continue?"
-          onConfirm={handleConfirmNew}
-          onCancel={() => setShowConfirm(false)}
+          message={
+            pendingAction === 'new'
+              ? "You have unsaved changes. Starting a new project will discard all current data. Would you like to continue?"
+              : "You have unsaved changes. Loading a new project will discard all current data. Would you like to continue?"
+          }
+          confirmText={pendingAction === 'new' ? "New Project" : "Load Project"}
+          onConfirm={handleConfirmPending}
+          onCancel={() => setPendingAction(null)}
         />
       )}
 
-      {/* Hidden file input for Load */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json"
-        className="hidden"
-        onChange={handleFileChange}
-      />
+
 
       {/* Header Row */}
-      <div className="mb-6 flex items-start justify-between gap-6">
-        <div className="flex-1">
+      <div className="mb-6 flex flex-col md:flex-row md:items-start md:justify-between gap-6">
+        <div className="flex-1 w-full">
           <h1 className="text-3xl font-bold tracking-tight text-text-primary mb-5">
             Dooley's Construction Hub
           </h1>
-          <div className="flex items-center gap-4">
-            <div className="flex-1 max-w-sm">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex-1 min-w-[240px] max-w-sm">
               <label className="block text-[10px] text-text-muted uppercase tracking-widest font-bold mb-1.5">Project Name</label>
               <input
                 id="project-name-input"
@@ -180,7 +184,7 @@ function Dashboard() {
                 className="w-full bg-bg-surface border border-border rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/20 transition-colors"
               />
             </div>
-            <div className="w-48">
+            <div className="w-full sm:w-48">
               <label className="block text-[10px] text-text-muted uppercase tracking-widest font-bold mb-1.5">Project Number</label>
               <input
                 id="project-number-input"
@@ -200,7 +204,7 @@ function Dashboard() {
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-3 pt-1">
+        <div className="flex flex-wrap items-center gap-3 pt-1 md:pt-6">
           <button
             id="new-project-btn"
             onClick={handleNewProject}

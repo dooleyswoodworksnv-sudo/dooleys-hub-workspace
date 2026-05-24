@@ -9,7 +9,7 @@
   "scripts": {
     "postinstall": "node -e \"const fs=require('fs'),p=require('path');const w=p.join('node_modules','pdfjs-dist','build','pdf.worker.mjs');['apps/hub/public','apps/blueprint-standalone/public'].forEach(d=>{fs.mkdirSync(d,{recursive:true});fs.copyFileSync(w,p.join(d,'pdf.worker.mjs'))});console.log('PDF.js worker copied to public dirs')\"",
     "build": "turbo run build",
-    "dev": "turbo run dev --filter=@dooleys/hub",
+    "dev": "turbo run dev --filter=@dooleys/hub --filter=@dooleys/asset-server",
     "dev:blueprint": "turbo run dev --filter=@dooleys/blueprint-standalone",
     "dev:all": "turbo run dev",
     "lint": "turbo run lint",
@@ -17,5 +17,8 @@
   },
   "devDependencies": {
     "turbo": "latest"
+  },
+  "dependencies": {
+    "puppeteer": "^25.0.4"
   }
 }

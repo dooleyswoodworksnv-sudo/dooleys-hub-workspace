@@ -3,6 +3,7 @@ import { sanitize } from '../utils/math';
 import { InteriorWallConfig, ExteriorWallConfig, DoorConfig, WindowConfig, BumpoutConfig, Guide, SnapPoint, InteriorAsset, RoofPart, TrussConfig, DormerConfig, CustomCamera, RoofGroup } from '../App';
 import { getSymbolById, CATEGORY_COLORS } from './SymbolCatalog';
 import { computeRoofPlan, shellToBounds, RoofShellBounds } from '../utils/roofGeometry';
+import { detectBays, computeFramingSupportSystem } from '../utils/bayDetection';
 import { ZoomIn, ZoomOut, Maximize, Minimize, Focus, Hand, ChevronLeft, ChevronRight, Ruler, Trash2, Undo2, Search, Lock, MousePointer2, Save, FolderOpen, ChevronDown, ChevronUp, Square, Box as BoxIcon, Combine, Layers, Home, Grid, Camera } from 'lucide-react';
 
 interface Preview2DProps {
@@ -36,9 +37,18 @@ interface Preview2DProps {
   joistSpacing: number;
   joistSize: string;
   joistDirection: 'x' | 'y';
+  floorBays?: { id: string; label: string; joistDirection: 'x' | 'y'; x: number; y: number; width: number; height: number }[];
   addSubfloor: boolean;
   subfloorThickness: number;
   subfloorMaterial: 'plywood' | 'osb';
+  enableGirderSystem?: boolean;
+  girderSpanThresholdFt?: number;
+  girderPostSpacingFt?: number;
+  girderSize?: '2-2x10' | '3-2x10' | '4-2x10' | '6x6' | '6x8';
+  girderPostSize?: '4x4' | '6x6';
+  girderPierSize?: '12" Round' | '16" Square';
+  addPocketBeams?: boolean;
+  pocketBeamsOnlyAtGirderEnds?: boolean;
   // PDF Reference
   pdfImages: string[];
   selectedPdfIndex: number;
@@ -96,12 +106,112 @@ interface Preview2DProps {
   roofGroups?: RoofGroup[];
 }
 
+interface GirderData {
+  id: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  length: number;
+  posts: { x: number; y: number; id: string }[];
+  brackets: { x: number; y: number; id: string; type: 'start' | 'end' }[];
+}
+
+export function computeGirdersForBay(
+  bay: { x: number; y: number; width: number; height: number; joistDirection: 'x' | 'y' },
+  enableGirderSystem: boolean,
+  girderSpanThresholdFt: number,
+  girderPostSpacingFt: number
+): GirderData[] {
+  if (!enableGirderSystem) return [];
+
+  const thresholdIn = girderSpanThresholdFt * 12;
+  const postSpacingIn = girderPostSpacingFt * 12;
+
+  const isSpanY = bay.joistDirection === 'y';
+  const spanIn = isSpanY ? bay.height : bay.width;
+  const girderLengthIn = isSpanY ? bay.width : bay.height;
+
+  if (spanIn <= thresholdIn) return [];
+
+  // Split the span equally
+  const numSpaces = Math.ceil(spanIn / thresholdIn);
+  const numGirders = numSpaces - 1;
+  const girders: GirderData[] = [];
+
+  for (let i = 1; i <= numGirders; i++) {
+    const offset = i * (spanIn / numSpaces);
+    
+    let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    if (isSpanY) {
+      x1 = bay.x;
+      y1 = bay.y + offset;
+      x2 = bay.x + bay.width;
+      y2 = y1;
+    } else {
+      x1 = bay.x + offset;
+      y1 = bay.y;
+      x2 = x1;
+      y2 = bay.y + bay.height;
+    }
+
+    const numPostSpaces = Math.max(1, Math.ceil(girderLengthIn / postSpacingIn));
+    const posts: { x: number; y: number; id: string }[] = [];
+    const brackets: { x: number; y: number; id: string; type: 'start' | 'end' }[] = [];
+
+    for (let j = 0; j <= numPostSpaces; j++) {
+      const pOffset = j * (girderLengthIn / numPostSpaces);
+      let px = 0, py = 0;
+      if (isSpanY) {
+        px = bay.x + pOffset;
+        py = y1;
+      } else {
+        px = x1;
+        py = bay.y + pOffset;
+      }
+
+      if (j === 0) {
+        brackets.push({ x: px, y: py, id: `bracket-${i}-start`, type: 'start' });
+      } else if (j === numPostSpaces) {
+        brackets.push({ x: px, y: py, id: `bracket-${i}-end`, type: 'end' });
+      } else {
+        posts.push({
+          x: px,
+          y: py,
+          id: `post-${i}-${j}`
+        });
+      }
+    }
+
+    girders.push({
+      id: `girder-${i}`,
+      x1,
+      y1,
+      x2,
+      y2,
+      length: girderLengthIn,
+      posts,
+      brackets
+    });
+  }
+
+  return girders;
+}
+
 export default function Preview2D({
   shape, widthIn, lengthIn, thicknessIn, lRightDepthIn, lBackWidthIn, uWallsIn,
   hLeftBarWidthIn, hRightBarWidthIn, hMiddleBarHeightIn, hMiddleBarOffsetIn,
   tTopWidthIn, tTopLengthIn, tStemWidthIn, tStemLengthIn,
   interiorWalls, exteriorWalls, doors, windows, bumpouts, updateInteriorWallFields, updateExteriorWallFields, updateDoorFields, updateWindowFields, updateBumpoutFields, getSnapPoints,
-  addFloorFraming, joistSpacing, joistSize, joistDirection, addSubfloor, subfloorThickness, subfloorMaterial,
+  addFloorFraming, joistSpacing, joistSize, joistDirection, floorBays = [], addSubfloor, subfloorThickness, subfloorMaterial,
+  enableGirderSystem = false,
+  girderSpanThresholdFt = 12,
+  girderPostSpacingFt = 8,
+  girderSize = '3-2x10',
+  girderPostSize = '6x6',
+  girderPierSize = '12" Round',
+  addPocketBeams = true,
+  pocketBeamsOnlyAtGirderEnds = false,
   pdfImages, selectedPdfIndex, pdfScale, pdfOffset, pdfRotation, pdfOpacity, isBlueprintLocked, pdfCalibration, setPdfScale, setPdfOffset, setPdfOpacity, setPdfCalibration, setSelectedPdfIndex,
   onSave, onLoad,
   isCalibrating, setIsCalibrating, appliedCalibration, guides, onAddGuide, onDeleteLastGuide, onClearGuides,
@@ -296,8 +406,9 @@ export default function Preview2D({
   let maxY = 0;
 
   const formatDim = (inches: number) => {
-    const ft = Math.floor(inches / 12);
-    const inc = Math.round(inches % 12);
+    const totalRounded = Math.round(Math.abs(inches));
+    const ft = Math.floor(totalRounded / 12);
+    const inc = totalRounded % 12;
     if (ft === 0) return `${inc}"`;
     if (inc === 0) return `${ft}'`;
     return `${ft}'-${inc}"`;
@@ -492,7 +603,7 @@ export default function Preview2D({
   const allElements = [
     ...exteriorWalls.map(w => {
       const x = w.xFt * 12 + w.xInches;
-      const y = w.yFt * 12 + thicknessIn; // approximate
+      const y = w.yFt * 12 + w.yInches;
       const len = w.lengthFt * 12 + w.lengthInches;
       const isHorizontal = w.orientation === 'horizontal';
       return { x, y, w: isHorizontal ? len : w.thicknessIn, h: isHorizontal ? w.thicknessIn : len };
@@ -608,25 +719,34 @@ export default function Preview2D({
     const len = wall.lengthFt * 12 + wall.lengthInches;
     const isHorizontal = wall.orientation === 'horizontal';
     
-    // Length Dimension
+    // Compute the same visual position as the wall rect (accounting for exteriorSide offset)
+    let visualX = x;
+    let visualY = y;
+    if (isHorizontal) {
+      if (wall.exteriorSide === 1) visualY -= wall.thicknessIn;
+    } else {
+      if (wall.exteriorSide === 1) visualX -= wall.thicknessIn;
+    }
+    
+    // Length Dimension — aligned with the visual wall rect
     dimensions.push({
-      x1: x,
-      y1: y + (isHorizontal ? wall.thicknessIn : 0),
-      x2: x + (isHorizontal ? len : 0),
-      y2: y + (isHorizontal ? wall.thicknessIn : len),
+      x1: isHorizontal ? visualX : visualX + wall.thicknessIn,
+      y1: isHorizontal ? visualY + wall.thicknessIn : visualY,
+      x2: isHorizontal ? visualX + len : visualX + wall.thicknessIn,
+      y2: isHorizontal ? visualY + wall.thicknessIn : visualY + len,
       label: formatDim(len),
       offset: 12,
       isHorizontal
     });
 
     // X placement
-    if (x > 0) {
+    if (visualX > 0) {
       dimensions.push({
         x1: 0,
-        y1: y + (isHorizontal ? wall.thicknessIn / 2 : 0),
-        x2: x,
-        y2: y + (isHorizontal ? wall.thicknessIn / 2 : 0),
-        label: formatDim(x),
+        y1: visualY + (isHorizontal ? wall.thicknessIn / 2 : 0),
+        x2: visualX,
+        y2: visualY + (isHorizontal ? wall.thicknessIn / 2 : 0),
+        label: formatDim(visualX),
         offset: -12,
         isHorizontal: true,
         isPlacement: true
@@ -634,13 +754,13 @@ export default function Preview2D({
     }
 
     // Y placement
-    if (y > 0) {
+    if (visualY > 0) {
       dimensions.push({
-        x1: x + (isHorizontal ? 0 : wall.thicknessIn / 2),
+        x1: visualX + (isHorizontal ? 0 : wall.thicknessIn / 2),
         y1: 0,
-        x2: x + (isHorizontal ? 0 : wall.thicknessIn / 2),
-        y2: y,
-        label: formatDim(y),
+        x2: visualX + (isHorizontal ? 0 : wall.thicknessIn / 2),
+        y2: visualY,
+        label: formatDim(visualY),
         offset: -12,
         isHorizontal: false,
         isPlacement: true
@@ -2655,10 +2775,56 @@ export default function Preview2D({
             </pattern>
             <rect x={-padding} y={-padding} width={maxX + padding * 2} height={maxY + padding * 2} fill="url(#grid)" />
 
-            {/* Floor Joists */}
             {addFloorFraming && viewMode === 'floor' && (
               <g className="floor-joists" opacity="0.3">
-                {joistDirection === 'y' ? (
+                {floorBays && floorBays.length > 0 ? (
+                  <>
+                    {floorBays.map((bay) => (
+                      <g key={bay.id}>
+                        {/* Bay boundary */}
+                        <rect
+                          x={bay.x} y={bay.y} width={bay.width} height={bay.height}
+                          fill="none" stroke="#6366f1" strokeWidth="1" strokeDasharray="6 3" opacity="0.4"
+                        />
+                        {/* Bay label */}
+                        <text
+                          x={bay.x + bay.width / 2} y={bay.y + bay.height / 2}
+                          textAnchor="middle" dominantBaseline="central"
+                          fill="#6366f1" fontSize="10" fontWeight="bold" opacity="0.5"
+                        >
+                          {bay.label}
+                        </text>
+                        {bay.joistDirection === 'y' ? (
+                          <>
+                            {/* Rim joists front/back */}
+                            <rect x={bay.x} y={bay.y} width={bay.width} height={1.5} fill="#52525b" />
+                            <rect x={bay.x} y={bay.y + bay.height - 1.5} width={bay.width} height={1.5} fill="#52525b" />
+                            {/* Joists spaced along X */}
+                            {Array.from({ length: Math.ceil(bay.width / joistSpacing) + 1 }).map((_, i) => {
+                              let jx = bay.x + i * joistSpacing;
+                              if (jx + 1.5 > bay.x + bay.width) jx = bay.x + bay.width - 1.5;
+                              if (jx < bay.x) jx = bay.x;
+                              return <rect key={`j-${bay.id}-${i}`} x={jx} y={bay.y + 1.5} width={1.5} height={bay.height - 3} fill="#71717a" />;
+                            })}
+                          </>
+                        ) : (
+                          <>
+                            {/* Rim joists left/right */}
+                            <rect x={bay.x} y={bay.y} width={1.5} height={bay.height} fill="#52525b" />
+                            <rect x={bay.x + bay.width - 1.5} y={bay.y} width={1.5} height={bay.height} fill="#52525b" />
+                            {/* Joists spaced along Z */}
+                            {Array.from({ length: Math.ceil(bay.height / joistSpacing) + 1 }).map((_, i) => {
+                              let jy = bay.y + i * joistSpacing;
+                              if (jy + 1.5 > bay.y + bay.height) jy = bay.y + bay.height - 1.5;
+                              if (jy < bay.y) jy = bay.y;
+                              return <rect key={`j-${bay.id}-${i}`} x={bay.x + 1.5} y={jy} width={bay.width - 3} height={1.5} fill="#71717a" />;
+                            })}
+                          </>
+                        )}
+                      </g>
+                    ))}
+                  </>
+                ) : joistDirection === 'y' ? (
                   <>
                     {/* Rim joists (front and back) */}
                     <rect x={0} y={0} width={widthIn} height={1.5} fill="#52525b" />
@@ -2694,10 +2860,11 @@ export default function Preview2D({
                         <rect x={(tTopWidthIn - tStemWidthIn) / 2} y={tTopLengthIn + tStemLengthIn - 1.5} width={tStemWidthIn} height={1.5} fill="#52525b" />
                       </>
                     )}
-                    {Array.from({ length: Math.ceil(widthIn / joistSpacing) + 1 }).map((_, i) => {
+                    {Array.from({ length: Math.ceil((shape === 't-shape' ? tTopWidthIn : widthIn) / joistSpacing) + 1 }).map((_, i) => {
+                      const limitW = shape === 't-shape' ? tTopWidthIn : widthIn;
                       let jx = i * joistSpacing;
-                      if (jx + 1.5 > widthIn) jx = widthIn - 1.5;
-                      let h = lengthIn;
+                      if (jx + 1.5 > limitW) jx = limitW - 1.5;
+                      let h = shape === 't-shape' ? (tTopLengthIn + tStemLengthIn) : lengthIn;
                       if (shape === 'l-shape' && jx >= lBackWidthIn) h = lRightDepthIn;
                       if (shape === 'u-shape') {
                         if (jx >= uWallsIn.w7 && jx < (uWallsIn.w1 - uWallsIn.w3)) h = uWallsIn.w2 - uWallsIn.w4;
@@ -2756,10 +2923,11 @@ export default function Preview2D({
                         <rect x={(tTopWidthIn + tStemWidthIn) / 2 - 1.5} y={tTopLengthIn} width={1.5} height={tStemLengthIn} fill="#52525b" />
                       </>
                     )}
-                    {Array.from({ length: Math.ceil(lengthIn / joistSpacing) + 1 }).map((_, i) => {
+                    {Array.from({ length: Math.ceil((shape === 't-shape' ? (tTopLengthIn + tStemLengthIn) : lengthIn) / joistSpacing) + 1 }).map((_, i) => {
+                      const limitL = shape === 't-shape' ? (tTopLengthIn + tStemLengthIn) : lengthIn;
                       let jy = i * joistSpacing;
-                      if (jy + 1.5 > lengthIn) jy = lengthIn - 1.5;
-                      let w = widthIn;
+                      if (jy + 1.5 > limitL) jy = limitL - 1.5;
+                      let w = shape === 't-shape' ? tTopWidthIn : widthIn;
                       if (shape === 'l-shape' && jy >= lRightDepthIn) w = lBackWidthIn;
                       if (shape === 'u-shape') {
                         if (jy >= (uWallsIn.w2 - uWallsIn.w4)) {
@@ -2794,6 +2962,224 @@ export default function Preview2D({
                     })}
                   </>
                 )}
+              </g>
+            )}
+
+            {/* Floor Girder Support System */}
+            {addFloorFraming && viewMode === 'floor' && enableGirderSystem && (
+              <g className="floor-girders">
+                {(() => {
+                  const mockState = {
+                    shape,
+                    widthFt: Math.floor(widthIn / 12),
+                    widthInches: widthIn % 12,
+                    lengthFt: Math.floor(lengthIn / 12),
+                    lengthInches: lengthIn % 12,
+                    lRightDepthFt: Math.floor(lRightDepthIn / 12),
+                    lRightDepthInches: lRightDepthIn % 12,
+                    lBackWidthFt: Math.floor(lBackWidthIn / 12),
+                    lBackWidthInches: lBackWidthIn % 12,
+                    lDirection: lDirection || 'back-right',
+                    uWalls: {
+                      w1: Math.floor(uWallsIn.w1 / 12),
+                      w2: Math.floor(uWallsIn.w2 / 12),
+                      w3: Math.floor(uWallsIn.w3 / 12),
+                      w4: Math.floor(uWallsIn.w4 / 12),
+                      w5: Math.floor(uWallsIn.w5 / 12),
+                      w6: Math.floor(uWallsIn.w6 / 12),
+                      w7: Math.floor(uWallsIn.w7 / 12),
+                      w8: Math.floor(uWallsIn.w8 / 12),
+                    },
+                    uWallsInches: {
+                      w1: uWallsIn.w1 % 12,
+                      w2: uWallsIn.w2 % 12,
+                      w3: uWallsIn.w3 % 12,
+                      w4: uWallsIn.w4 % 12,
+                      w5: uWallsIn.w5 % 12,
+                      w6: uWallsIn.w6 % 12,
+                      w7: uWallsIn.w7 % 12,
+                      w8: uWallsIn.w8 % 12,
+                    },
+                    uDirection: 'back',
+                    hLeftBarWidthFt: Math.floor(hLeftBarWidthIn / 12),
+                    hLeftBarWidthInches: hLeftBarWidthIn % 12,
+                    hRightBarWidthFt: Math.floor(hRightBarWidthIn / 12),
+                    hRightBarWidthInches: hRightBarWidthIn % 12,
+                    hMiddleBarHeightFt: Math.floor(hMiddleBarHeightIn / 12),
+                    hMiddleBarHeightInches: hMiddleBarHeightIn % 12,
+                    hMiddleBarOffsetFt: Math.floor(hMiddleBarOffsetIn / 12),
+                    hMiddleBarOffsetInches: hMiddleBarOffsetIn % 12,
+                    tTopWidthFt: Math.floor(tTopWidthIn / 12),
+                    tTopWidthInches: tTopWidthIn % 12,
+                    tTopLengthFt: Math.floor(tTopLengthIn / 12),
+tTopLengthInches: tTopLengthIn % 12,
+                    tStemWidthFt: Math.floor(tStemWidthIn / 12),
+                    tStemWidthInches: tStemWidthIn % 12,
+                    tStemLengthFt: Math.floor(tStemLengthIn / 12),
+                    tStemLengthInches: tStemLengthIn % 12,
+                    combinedBlocks,
+                    shapeBlocks,
+                  } as any;
+
+                  const activeBays = floorBays && floorBays.length > 0 ? floorBays : detectBays(mockState);
+                  const parsedBays = activeBays.map(bay => {
+                    const direction = floorBays && floorBays.length > 0 ? bay.joistDirection : joistDirection;
+                    return { ...bay, joistDirection: direction };
+                  });
+
+                  const supportSystem = computeFramingSupportSystem({
+                    enableGirderSystem,
+                    addFloorFraming,
+                    girderSpanThresholdFt,
+                    girderPostSpacingFt,
+                    addPocketBeams,
+                    pocketBeamsOnlyAtGirderEnds
+                  }, parsedBays);
+
+                  return (
+                    <g key="framing-support-system">
+                      {/* Pocket Beams (Interior boundaries) */}
+                      {supportSystem.pocketBeams.map((pb) => (
+                        <g key={pb.id}>
+                          {/* Indigo dashed line for the pocket beam */}
+                          <line 
+                            x1={pb.dir === 'y' ? pb.coord : pb.start} 
+                            y1={pb.dir === 'y' ? pb.start : pb.coord} 
+                            x2={pb.dir === 'y' ? pb.coord : pb.end} 
+                            y2={pb.dir === 'y' ? pb.end : pb.coord} 
+                            stroke="#4f46e5" 
+                            strokeWidth="4" 
+                            strokeDasharray="8 4"
+                            className="cursor-pointer"
+                          >
+                            <title>{girderSize} Pocket Beam (Interior framing transition)</title>
+                          </line>
+
+                          {/* Posts and Piers along the pocket beam */}
+                          {pb.posts.map((post) => (
+                            <g key={post.id} className="cursor-pointer">
+                              {/* Concrete Pier (Circle) */}
+                              <circle 
+                                cx={post.x} 
+                                cy={post.y} 
+                                r="6" 
+                                fill="#94a3b8" 
+                                stroke="#64748b" 
+                                strokeWidth="1" 
+                              />
+                              {/* Wood Post (Square) */}
+                              <rect 
+                                x={post.x - 3} 
+                                y={post.y - 3} 
+                                width="6" 
+                                height="6" 
+                                fill="#ea580c" 
+                                stroke="#c2410c" 
+                                strokeWidth="1" 
+                              />
+                              <title>{girderPierSize} Concrete Pier & {girderPostSize} Post</title>
+                            </g>
+                          ))}
+
+                          {/* Simpson wall brackets at the pocket beam perimeter endpoints */}
+                          {pb.brackets.map((br) => (
+                            <g key={br.id} className="cursor-pointer">
+                              <rect 
+                                x={br.x - 4} 
+                                y={br.y - 4} 
+                                width="8" 
+                                height="8" 
+                                rx="1" 
+                                fill="#71717a" 
+                                stroke="#3f3f46" 
+                                strokeWidth="1" 
+                              />
+                              <line 
+                                x1={br.x - 4} 
+                                y1={br.y} 
+                                x2={br.x + 4} 
+                                y2={br.y} 
+                                stroke="#d4d4d8" 
+                                strokeWidth="0.75" 
+                              />
+                              <title>Simpson Heavy Girder Wall Bracket</title>
+                            </g>
+                          ))}
+                        </g>
+                      ))}
+
+                      {/* Girders */}
+                      {supportSystem.girders.map((g) => (
+                        <g key={g.id}>
+                          {/* Crimson dashed line for the beam */}
+                          <line 
+                            x1={g.x1} 
+                            y1={g.y1} 
+                            x2={g.x2} 
+                            y2={g.y2} 
+                            stroke="#dc2626" 
+                            strokeWidth="3" 
+                            strokeDasharray="6 3"
+                            className="cursor-pointer"
+                          >
+                            <title>{girderSize} Girder Beam</title>
+                          </line>
+
+                          {/* Posts and Piers along the beam */}
+                          {g.posts.map((post) => (
+                            <g key={post.id} className="cursor-pointer">
+                              {/* Concrete Pier (Circle) */}
+                              <circle 
+                                cx={post.x} 
+                                cy={post.y} 
+                                r="6" 
+                                fill="#94a3b8" 
+                                stroke="#64748b" 
+                                strokeWidth="1" 
+                              />
+                              {/* Wood Post (Square) */}
+                              <rect 
+                                x={post.x - 3} 
+                                y={post.y - 3} 
+                                width="6" 
+                                height="6" 
+                                fill="#ea580c" 
+                                stroke="#c2410c" 
+                                strokeWidth="1" 
+                              />
+                              <title>{girderPierSize} Concrete Pier & {girderPostSize} Post</title>
+                            </g>
+                          ))}
+
+                          {/* Brackets at girder endpoints */}
+                          {g.brackets.map((br) => (
+                            <g key={br.id} className="cursor-pointer">
+                              <rect 
+                                x={br.x - 4} 
+                                y={br.y - 4} 
+                                width="8" 
+                                height="8" 
+                                rx="1" 
+                                fill={br.isWoodToWood ? "#a1a1aa" : "#71717a"} 
+                                stroke={br.isWoodToWood ? "#52525b" : "#3f3f46"} 
+                                strokeWidth="1" 
+                              />
+                              <line 
+                                x1={br.x - 4} 
+                                y1={br.y} 
+                                x2={br.x + 4} 
+                                y2={br.y} 
+                                stroke={br.isWoodToWood ? "#f4f4f5" : "#d4d4d8"} 
+                                strokeWidth="0.75" 
+                              />
+                              <title>{br.isWoodToWood ? "Simpson Wood-to-Wood Girder Hanger" : "Simpson Heavy Girder Wall Bracket"}</title>
+                            </g>
+                          ))}
+                        </g>
+                      ))}
+                    </g>
+                  );
+                })()}
               </g>
             )}
 

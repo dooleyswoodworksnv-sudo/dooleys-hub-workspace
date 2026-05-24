@@ -76,49 +76,83 @@ function AppContent() {
   const stateRef = useRef<HistoryState>({ notations: [], guides: [], calibrationScale: null, addedItems: [] });
 
   // ── Bridge: sync analysis data + images to shared ProjectContext ──
-  const { setBlueprintData, blueprintData, currentProject, setCurrentProject } = useProject();
+  const { setBlueprintData, blueprintData, currentProject, setCurrentProject, saveToFile: contextSaveToFile, loadFromFile: contextLoadFromFile, projectFileName } = useProject();
   const hasHydratedRef = useRef(false);
 
   // ── Reverse bridge: hydrate local state FROM ProjectContext on hub project load ──
+  const lastProjectInstanceIdRef = useRef<string | null>(null);
   useEffect(() => {
-    // Only hydrate once, and only when we have context data but no local data
-    if (hasHydratedRef.current) return;
-    if (!blueprintData) return;
-    if (data || preview) return; // Already have local state — don't overwrite
+    const projectId = currentProject?.id ?? null;
+    if (projectId !== lastProjectInstanceIdRef.current) {
+      lastProjectInstanceIdRef.current = projectId;
 
-    hasHydratedRef.current = true;
+      if (!blueprintData) {
+        setData(null);
+        setPreview(null);
+        setNotations([]);
+        setGuides([]);
+        setCalibrationScale(null);
+        setAddedItems([]);
+        return;
+      }
 
-    // Restore analysis data (summary + items)
-    if (blueprintData.analysisSummary || (blueprintData.items && blueprintData.items.length > 0)) {
-      setData({
-        analysisSummary: blueprintData.analysisSummary || '',
-        items: blueprintData.items.map(item => ({
-          id: item.id,
-          type: item.type,
-          label: item.label,
-          description: item.description,
-          value: item.value,
-          page: item.page,
-          boundingBox: item.boundingBox,
-          confidence: item.confidence,
-        })),
-      });
+      // Restore analysis data (summary + items)
+      if (blueprintData.analysisSummary || (blueprintData.items && blueprintData.items.length > 0)) {
+        setData({
+          analysisSummary: blueprintData.analysisSummary || '',
+          sheetTitle: blueprintData.sheetTitle,
+          sheetNumber: blueprintData.sheetNumber,
+          pageMeta: blueprintData.pageMeta,
+          items: blueprintData.items.map(item => ({
+            id: item.id,
+            type: item.type,
+            label: item.label,
+            description: item.description,
+            value: item.value,
+            page: item.page,
+            boundingBox: item.boundingBox,
+            confidence: item.confidence,
+          })),
+        });
+      }
+
+      // Restore notations, guides, calibrationScale
+      if (blueprintData.notations) {
+        setNotations(blueprintData.notations);
+      } else {
+        setNotations([]);
+      }
+      if (blueprintData.guides) {
+        setGuides(blueprintData.guides);
+      } else {
+        setGuides([]);
+      }
+      if (blueprintData.calibrationScale) {
+        setCalibrationScale(blueprintData.calibrationScale);
+      } else {
+        setCalibrationScale(null);
+      }
+
+      // Restore preview image from saved image data URLs
+      if (blueprintData.imageDataUrls && blueprintData.imageDataUrls.length > 0) {
+        setPreview(blueprintData.imageDataUrls[0]);
+        setUploadMode(blueprintData.imageDataUrls.length > 1 ? 'pdf' : 'image');
+        setNumPages(blueprintData.imageDataUrls.length);
+        setCurrentPage(1);
+      } else {
+        setPreview(null);
+      }
     }
-
-    // Restore preview image from saved image data URLs
-    if (blueprintData.imageDataUrls && blueprintData.imageDataUrls.length > 0) {
-      setPreview(blueprintData.imageDataUrls[0]);
-      setUploadMode(blueprintData.imageDataUrls.length > 1 ? 'pdf' : 'image');
-      setNumPages(blueprintData.imageDataUrls.length);
-      setCurrentPage(1);
-    }
-  }, [blueprintData, data, preview]);
+  }, [blueprintData, currentProject]);
 
   // ── Forward bridge: push analysis data to shared ProjectContext ──
   useEffect(() => {
     if (data) {
       setBlueprintData({
         analysisSummary: data.analysisSummary,
+        sheetTitle: data.sheetTitle,
+        sheetNumber: data.sheetNumber,
+        pageMeta: data.pageMeta,
         items: data.items.map(item => ({
           id: item.id,
           type: item.type,
@@ -131,11 +165,14 @@ function AppContent() {
         })),
         // Preserve existing images if already set
         imageDataUrls: blueprintData?.imageDataUrls,
+        notations: notations,
+        guides: guides,
+        calibrationScale: calibrationScale,
       });
     } else if (!preview) {
       setBlueprintData(null);
     }
-  }, [data, setBlueprintData]);
+  }, [data, notations, guides, calibrationScale, setBlueprintData]);
 
   // ── Bridge: push ALL blueprint pages to context ──
   const lastSyncedPdfRef = useRef<string | null>(null);
@@ -154,6 +191,7 @@ function AppContent() {
         }
         if (allPageUrls.length > 0) {
           setBlueprintData({
+            ...blueprintData,
             analysisSummary: blueprintData?.analysisSummary ?? '',
             items: blueprintData?.items ?? [],
             imageDataUrls: allPageUrls,
@@ -164,6 +202,7 @@ function AppContent() {
     // For single images (PNG/JPG): push as 1-element array
     else if (preview && !pdfDoc && uploadMode === 'image') {
       setBlueprintData({
+        ...blueprintData,
         analysisSummary: blueprintData?.analysisSummary ?? '',
         items: blueprintData?.items ?? [],
         imageDataUrls: [preview],
@@ -331,12 +370,25 @@ function AppContent() {
       fileData: originalFileData,
       data,
       notations,
+      guides,
       calibrationScale,
       addedItems
     };
   };
 
   const handleSaveProject = async (explicitHandle?: ProjectFileHandle) => {
+    // When running inside the Hub, use the unified project save
+    if (contextSaveToFile && !explicitHandle) {
+      try {
+        await contextSaveToFile();
+        setLastSavedTime(new Date());
+      } catch (err) {
+        console.error("Failed to save project:", err);
+      }
+      return;
+    }
+
+    // Standalone / auto-save path
     if (!file || !originalFileData) {
       console.error("Cannot save project: missing data", { file, originalFileData });
       return;
@@ -437,6 +489,20 @@ function AppContent() {
   }, [file, data, notations, calibrationScale, addedItems, fileHandle, lastSavedHash]);
 
   const handleOpenProject = async () => {
+    // When running inside the Hub, use the unified project load
+    if (contextLoadFromFile) {
+      try {
+        await contextLoadFromFile();
+      } catch (err: any) {
+        if (err?.message) {
+          console.error("Error loading project:", err);
+          setError(err.message);
+        }
+      }
+      return;
+    }
+
+    // Standalone path
     setUploadMode('project');
     const isIframe = window.self !== window.top;
     
@@ -523,6 +589,7 @@ function AppContent() {
       fileData: value.fileData,
       data: isRecord(value.data) ? value.data as unknown as BlueprintData : null,
       notations: Array.isArray(value.notations) ? value.notations as Notation[] : [],
+      guides: Array.isArray(value.guides) ? value.guides as Guide[] : [],
       calibrationScale: isRecord(value.calibrationScale) ? value.calibrationScale as unknown as CalibrationData : null,
       calibration: isRecord(value.calibration) ? value.calibration as unknown as CalibrationData : null,
       addedItems: Array.isArray(value.addedItems) ? value.addedItems.filter((item): item is string => typeof item === 'string') : [],
@@ -546,6 +613,7 @@ function AppContent() {
         setData(projectData.data);
         setAddedItems(projectData.addedItems || []);
         setNotations(projectData.notations || []);
+        setGuides(projectData.guides || []);
         setCalibrationScale(projectData.calibrationScale || projectData.calibration || null);
         setPast([]);
         setFuture([]);
@@ -823,7 +891,8 @@ function AppContent() {
           setAnalyzingProgress(`Analyzing page ${i} of ${end}...`);
           const pageDataUrl = await getPdfPageDataUrl(pdfDoc, i);
           if (pageDataUrl) {
-            const result = await analyzeBlueprint(pageDataUrl, 'image/png', finalPrompt, blueprintType);
+            const imageToAnalyze = (focusImage && i === currentPage) ? focusImage : pageDataUrl;
+            const result = await analyzeBlueprint(imageToAnalyze, 'image/png', finalPrompt, blueprintType);
             const itemsWithPage = result.items.map(item => ({ ...item, id: `${item.id}-page-${i}`, page: i }));
             newItems.push(...itemsWithPage);
             newSummaries.push(`Page ${i}: ${result.analysisSummary}`);
@@ -869,7 +938,8 @@ function AppContent() {
         }
 
         setAnalyzingProgress('Analyzing image...');
-        const result = await analyzeBlueprint(preview, 'image/png', finalPrompt, blueprintType);
+        const imageToAnalyze = focusImage ? focusImage : preview;
+        const result = await analyzeBlueprint(imageToAnalyze, 'image/png', finalPrompt, blueprintType);
         if (!isCancelledRef.current) {
           const singlePageMeta: Record<number, { sheetTitle?: string; sheetNumber?: string }> = {};
           if (result.sheetTitle || result.sheetNumber) {
@@ -1462,7 +1532,7 @@ function AppContent() {
         label,
         page: currentPage
       };
-      setGuides(prev => [...prev, newGuide]);
+      setGuides(prev => [...prev.filter(g => g.id !== 'calibration-guide'), newGuide]);
     }
     
     console.log('Calibration Scale Set Successfully');

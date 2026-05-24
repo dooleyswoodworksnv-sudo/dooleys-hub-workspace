@@ -7,6 +7,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   arrayMove,
@@ -301,7 +302,20 @@ interface PMAppProps {
 
 export default function App({ onPMChange }: PMAppProps = {}) {
   // ── Bridge: read Designer data & project identity ──
-  const { designConfig, currentProject, setCurrentProject } = useProject();
+  const {
+    designConfig,
+    currentProject,
+    setCurrentProject,
+    tasks: contextTasks,
+    budgetItems: contextBudgetItems,
+    changeOrders: contextChangeOrders,
+    subcontractors: contextSubcontractors,
+    progressPhotos: contextProgressPhotos,
+    dailyLogs: contextDailyLogs,
+    saveToFile: contextSaveToFile,
+    loadFromFile: contextLoadFromFile,
+    projectFileName,
+  } = useProject();
 
   const [elements, setElements] = useState<PDRIElement[]>(CRITICAL_ELEMENTS);
   const [scores, setScores] = useState<Record<string, DefinitionLevel>>({});
@@ -315,7 +329,8 @@ export default function App({ onPMChange }: PMAppProps = {}) {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [isVisualizationOpen, setIsVisualizationOpen] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3500); return () => clearTimeout(t); } }, [toast]);
 
   const [issues, setIssues] = useState<Record<string, Issue[]>>({});
   const [newIssue, setNewIssue] = useState<Partial<Issue>>({ title: '', assignee: '', dueDate: '' });
@@ -326,16 +341,30 @@ export default function App({ onPMChange }: PMAppProps = {}) {
   const [modelLoadedAt, setModelLoadedAt] = useState<string | null>(null);
 
   // Project Schedule & Subcontractors
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
-  const [subcontractors, setSubcontractors] = useState<Subcontractor[]>(INITIAL_SUBCONTRACTORS);
+  const [tasks, setTasks] = useState<Task[]>(() => {
+    if (contextTasks && contextTasks.length > 0) {
+      return contextTasks.map(t => ({
+        id: t.id,
+        name: t.name,
+        start: new Date(t.start),
+        end: new Date(t.end),
+        progress: t.progress,
+        status: t.status,
+        dependencies: t.dependencies,
+        drawPct: t.drawPct || 0,
+      }));
+    }
+    return INITIAL_TASKS;
+  });
+  const [subcontractors, setSubcontractors] = useState<Subcontractor[]>(() => contextSubcontractors || INITIAL_SUBCONTRACTORS);
 
   // Budget & Allowances
   const [baseContractPrice, setBaseContractPrice] = useState<number>(0);
-  const [budgetItems, setBudgetItems] = useState<BudgetItem[]>(INITIAL_BUDGET_ITEMS);
-  const [changeOrders, setChangeOrders] = useState<ChangeOrder[]>(INITIAL_CHANGE_ORDERS);
+  const [budgetItems, setBudgetItems] = useState<BudgetItem[]>(() => contextBudgetItems || INITIAL_BUDGET_ITEMS);
+  const [changeOrders, setChangeOrders] = useState<ChangeOrder[]>(() => contextChangeOrders || INITIAL_CHANGE_ORDERS);
 
   // Daily Progress & Spatial Logs State
-  const [progressPhotos, setProgressPhotos] = useState<ProgressPhoto[]>([]);
+  const [progressPhotos, setProgressPhotos] = useState<ProgressPhoto[]>(() => contextProgressPhotos || []);
   const [isPinningMode, setIsPinningMode] = useState<string | null>(null); // holds photo id
   const [showPhotoPins, setShowPhotoPins] = useState(true);
   const [viewingPhotoId, setViewingPhotoId] = useState<string | null>(null);
@@ -343,7 +372,43 @@ export default function App({ onPMChange }: PMAppProps = {}) {
   const [batchPhaseOpen, setBatchPhaseOpen] = useState(false);
   const [photoSortOrder, setPhotoSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [photoPhaseFilter, setPhotoPhaseFilter] = useState<string>('all');
-  const [dailyLogs, setDailyLogs] = useState<DailyLogEntry[]>([]);
+  const [dailyLogs, setDailyLogs] = useState<DailyLogEntry[]>(() => contextDailyLogs || []);
+
+  const lastProjectIdRef = useRef<string | null>(currentProject?.id || null);
+  useEffect(() => {
+    const projId = currentProject?.id || null;
+    if (projId !== lastProjectIdRef.current) {
+      lastProjectIdRef.current = projId;
+      
+      // Hydrate tasks
+      if (contextTasks && contextTasks.length > 0) {
+        setTasks(contextTasks.map(t => ({
+          id: t.id,
+          name: t.name,
+          start: new Date(t.start),
+          end: new Date(t.end),
+          progress: t.progress,
+          status: t.status,
+          dependencies: t.dependencies,
+          drawPct: t.drawPct || 0,
+        })));
+      } else {
+        setTasks(INITIAL_TASKS);
+      }
+
+      // Hydrate subcontractors
+      setSubcontractors(contextSubcontractors || INITIAL_SUBCONTRACTORS);
+
+      // Hydrate budget
+      setBudgetItems(contextBudgetItems || INITIAL_BUDGET_ITEMS);
+      setChangeOrders(contextChangeOrders || INITIAL_CHANGE_ORDERS);
+
+      // Hydrate photos & logs
+      setProgressPhotos(contextProgressPhotos || []);
+      setDailyLogs(contextDailyLogs || []);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProject?.id]);
 
   // ── Bridge: sync PM data to shared ProjectContext ──
   useEffect(() => {
@@ -357,6 +422,7 @@ export default function App({ onPMChange }: PMAppProps = {}) {
         progress: t.progress,
         status: t.status as 'completed' | 'on-track' | 'pending' | 'delayed',
         dependencies: t.dependencies,
+        drawPct: t.drawPct,
       })),
       budgetItems: budgetItems.map(b => ({
         id: b.id,
@@ -378,8 +444,21 @@ export default function App({ onPMChange }: PMAppProps = {}) {
         coiStatus: s.coiStatus,
         permitStatus: s.permitStatus,
       })),
+      progressPhotos: progressPhotos.map(p => ({
+        id: p.id,
+        url: p.url,
+        date: p.date,
+        phase: p.phase,
+        location: p.location,
+        note: p.note,
+      })),
+      dailyLogs: dailyLogs.map(l => ({
+        id: l.id,
+        date: l.date,
+        content: l.content,
+      })),
     });
-  }, [tasks, budgetItems, changeOrders, subcontractors, onPMChange]);
+  }, [tasks, budgetItems, changeOrders, subcontractors, progressPhotos, dailyLogs, onPMChange]);
 
   // Accordion state
   const [isAuditExpanded, setIsAuditExpanded] = useState(true);
@@ -389,9 +468,17 @@ export default function App({ onPMChange }: PMAppProps = {}) {
   const dailyLogRef = useRef<HTMLTextAreaElement>(null);
 
   // Stable blob URL for document preview (avoids leak from inline createObjectURL)
-  const previewImageUrl = useMemo(() => {
-    if (!previewFile || !fileStorage[previewFile] || !fileStorage[previewFile].type.startsWith('image/')) return null;
-    return URL.createObjectURL(fileStorage[previewFile]);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!previewFile || !fileStorage[previewFile] || !fileStorage[previewFile].type.startsWith('image/')) {
+      setPreviewImageUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(fileStorage[previewFile]);
+    setPreviewImageUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
   }, [previewFile, fileStorage]);
 
   // New Element Form State
@@ -427,7 +514,7 @@ export default function App({ onPMChange }: PMAppProps = {}) {
     })
   );
 
-  const handleDragEnd = (event: any) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
 
@@ -467,66 +554,25 @@ export default function App({ onPMChange }: PMAppProps = {}) {
 
   const [bcfImportStatus, setBcfImportStatus] = useState<string | null>(null);
 
-  const handleSaveProject = () => {
-    const data = {
-      baseContractPrice,
-      issues,
-      progressPhotos,
-      dailyLogs,
-      scores,
-      modelUrl,
-      tasks,
-      modelLoadedAt,
-      subcontractors,
-      budgetItems,
-      changeOrders
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `dbs_project_${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleSaveProject = async () => {
+    try {
+      await contextSaveToFile();
+      setToast({ message: projectFileName ? `Project updated: ${projectFileName}` : 'Project saved', type: 'success' });
+    } catch {
+      setToast({ message: 'Failed to save project file', type: 'error' });
+    }
   };
 
-  const handleImportProject = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const data = JSON.parse(event.target?.result as string);
-        if (data.issues) setIssues(data.issues);
-        if (data.baseContractPrice) setBaseContractPrice(data.baseContractPrice);
-        if (data.progressPhotos) setProgressPhotos(data.progressPhotos);
-        if (data.dailyLogs) setDailyLogs(data.dailyLogs);
-        if (data.scores) setScores(data.scores);
-        if (data.tasks) setTasks(data.tasks);
-        if (data.subcontractors) setSubcontractors(data.subcontractors);
-        if (data.budgetItems) setBudgetItems(data.budgetItems);
-        if (data.changeOrders) setChangeOrders(data.changeOrders);
-        if (data.modelLoadedAt) setModelLoadedAt(data.modelLoadedAt);
-        
-        let message = "Project imported successfully!";
-        
-        // Prevent loading blob urls from previous sessions
-        if (data.modelUrl && data.modelUrl.startsWith('blob:')) {
-          setModelUrl(null);
-          message += " Please re-upload your 3D model, as local files cannot be saved in the project data.";
-        } else {
-          setModelUrl(data.modelUrl || null);
-        }
-        
-        alert(message);
-      } catch (err) {
-        console.error("Failed to parse project file", err);
-        alert("Failed to parse project file");
+  const handleImportProject = async () => {
+    try {
+      await contextLoadFromFile();
+      setToast({ message: 'Project loaded', type: 'success' });
+    } catch (err: any) {
+      if (err?.message) {
+        console.error("Failed to load project file", err);
+        setToast({ message: err.message, type: 'error' });
       }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
+    }
   };
 
   const handleScanConflicts = (elementId: string) => {
@@ -613,14 +659,21 @@ export default function App({ onPMChange }: PMAppProps = {}) {
     const files = e.target.files;
     if (!files) return;
     
-    const newPhotos: ProgressPhoto[] = Array.from(files).map((file, i) => ({
-      id: `photo-${Date.now()}-${i}`,
-      url: URL.createObjectURL(file), // Need to revokeObjectURL on unmount, but for demo this is ok
-      date: new Date().toISOString().split('T')[0],
-      phase: ['Site Prep', 'Foundation', 'Framing', 'MEP Rough-In', 'Finishes'][Math.floor(Math.random() * 5)]
-    }));
+    Array.from(files).forEach((file, i) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64Url = reader.result as string;
+        const newPhoto: ProgressPhoto = {
+          id: `photo-${Date.now()}-${i}`,
+          url: base64Url,
+          date: new Date().toISOString().split('T')[0],
+          phase: 'Site Prep'
+        };
+        setProgressPhotos(prev => [newPhoto, ...prev]);
+      };
+      reader.readAsDataURL(file);
+    });
 
-    setProgressPhotos(prev => [...newPhotos, ...prev]);
     e.target.value = '';
   };
 
@@ -668,7 +721,7 @@ export default function App({ onPMChange }: PMAppProps = {}) {
 
   const handleAddElement = () => {
     if (!newElement.id || !newElement.name) {
-      alert("ID and Name are required.");
+      setToast({ message: 'ID and Name are required.', type: 'error' });
       return;
     }
     const elementToAdd = {
@@ -761,7 +814,7 @@ export default function App({ onPMChange }: PMAppProps = {}) {
               <label className="block text-[10px] uppercase tracking-[2px] text-text-muted font-bold mb-1">Project Name</label>
               <input
                 type="text"
-                value={designConfig?.projectName ?? currentProject?.name ?? ''}
+                value={currentProject?.name ?? ''}
                 onChange={(e) => {
                   const name = e.target.value;
                   setCurrentProject({
@@ -799,10 +852,12 @@ export default function App({ onPMChange }: PMAppProps = {}) {
           >
             <Save className="w-3.5 h-3.5" /> Save Project
           </button>
-          <label className="flex items-center gap-2 cursor-pointer border border-white/20 bg-black/50 text-text-muted text-[10px] uppercase tracking-widest px-4 py-2 hover:border-accent-gold hover:text-accent-gold transition-colors">
-            <Upload className="w-3.5 h-3.5" /> Import Project
-            <input type="file" accept=".json" className="hidden" onChange={handleImportProject} />
-          </label>
+          <button 
+            onClick={handleImportProject}
+            className="flex items-center gap-2 border border-white/20 bg-black/50 text-text-muted text-[10px] uppercase tracking-widest px-4 py-2 hover:border-accent-gold hover:text-accent-gold transition-colors"
+          >
+            <Upload className="w-3.5 h-3.5" /> Load Project
+          </button>
         </div>
 
         <div className="text-right">
@@ -815,6 +870,18 @@ export default function App({ onPMChange }: PMAppProps = {}) {
         
         {/* Left: Element List (Audit) */}
         <section className="bg-bg-primary p-10 lg:p-[40px_60px] relative max-w-7xl mx-auto">
+          {/* Toast notification */}
+          {toast && (
+            <div className={`fixed bottom-6 right-6 z-[9999] flex items-center gap-2.5 px-5 py-3 rounded-xl border shadow-xl backdrop-blur-md text-sm font-medium animate-[slideUp_0.3s_ease-out] ${
+              toast.type === 'success' ? 'border-accent-emerald/40 bg-accent-emerald/10 text-accent-emerald' :
+              toast.type === 'error' ? 'border-red-400/40 bg-red-400/10 text-red-400' :
+              'border-accent-blue/40 bg-accent-blue/10 text-accent-blue'
+            }`}
+              onClick={() => setToast(null)}
+            >
+              {toast.message}
+            </div>
+          )}
           {/* Clash Detection Visualizer at top */}
           <div className="mb-10 border border-white/10 rounded overflow-hidden">
             <div className="bg-bg-surface p-4 flex justify-between items-center border-b border-white/10">
@@ -1209,7 +1276,7 @@ export default function App({ onPMChange }: PMAppProps = {}) {
                     />
                   </div>
 
-                  <button className="w-full bg-accent-gold hover:bg-[#C09B2E] text-black font-bold py-4 transition-all flex items-center justify-center gap-2 text-[11px] uppercase tracking-[2px] shadow-lg shadow-accent-gold/10">
+                   <button onClick={() => handleScoreChange(el.id, 1 as DefinitionLevel)} className="w-full bg-accent-gold hover:bg-[#C09B2E] text-black font-bold py-4 transition-all flex items-center justify-center gap-2 text-[11px] uppercase tracking-[2px] shadow-lg shadow-accent-gold/10">
                     <Settings2 className="w-4 h-4" />
                     Finalize BIM Implementation Plan
                   </button>
@@ -1227,6 +1294,7 @@ export default function App({ onPMChange }: PMAppProps = {}) {
             setSubcontractors={setSubcontractors}
             tasks={tasks}
             modelLoadedAt={modelLoadedAt}
+            onToast={(message, type) => setToast({ message, type })}
           />
 
           {/* Budget & Allowances */}
@@ -1334,7 +1402,7 @@ export default function App({ onPMChange }: PMAppProps = {}) {
               >
                 <Upload className="w-8 h-8 text-text-muted mb-2" />
                 <span className="text-sm font-bold text-text-primary uppercase tracking-widest">Drag &amp; Drop Photos Here</span>
-                <span className="text-xs text-text-muted mt-1">Supports standard and 360Â° panoramic images</span>
+                <span className="text-xs text-text-muted mt-1">Supports standard and 360° panoramic images</span>
                 <input type="file" multiple accept="image/*" className="hidden" onChange={handlePhotoUpload} />
               </label>
             </div>

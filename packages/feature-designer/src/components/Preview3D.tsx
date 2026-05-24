@@ -1,13 +1,14 @@
 import { GableRoof, HipRoof, ShedRoof, RoofFace } from './Roofs';
 import React, { useMemo, Suspense, useState, useEffect, useRef } from 'react';
 import { Canvas, ThreeEvent, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Center, Environment, ContactShadows, Sky, useGLTF, Line, useTexture } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, Center, Environment, Sky, useGLTF, Line, useTexture } from '@react-three/drei';
 import { Geometry, Base, Subtraction } from '@react-three/csg';
 import * as THREE from 'three';
 import { InteriorWallConfig, ExteriorWallConfig, DoorConfig, WindowConfig, BumpoutConfig, InteriorAsset, RoofPart, TrussConfig, DormerConfig, CustomCamera, RoofGroup } from '../App';
 import { computeShellFaces3D, sliceFacesWithGroup } from '../utils/roofSlicer3D';
 import { useSpaceMouse } from '../hooks/useSpaceMouse';
 import SpaceMouseController from './SpaceMouseController';
+import { detectBays, computeFramingSupportSystem } from '../utils/bayDetection';
 
 interface Preview3DProps {
   shape: 'rectangle' | 'l-shape' | 'u-shape' | 'h-shape' | 't-shape' | 'custom';
@@ -43,10 +44,19 @@ interface Preview3DProps {
   joistSpacing: number;
   joistSize: string;
   joistDirection: 'x' | 'y';
+  floorBays?: { id: string; label: string; joistDirection: 'x' | 'y'; x: number; y: number; width: number; height: number }[];
   addSubfloor: boolean;
   subfloorThickness: number;
   subfloorMaterial: 'plywood' | 'osb';
   rimJoistThickness: number;
+  enableGirderSystem?: boolean;
+  girderSpanThresholdFt?: number;
+  girderPostSpacingFt?: number;
+  girderSize?: '2-2x10' | '3-2x10' | '4-2x10' | '6x6' | '6x8';
+  girderPostSize?: '4x4' | '6x6';
+  girderPierSize?: '12" Round' | '16" Square';
+  addPocketBeams?: boolean;
+  pocketBeamsOnlyAtGirderEnds?: boolean;
   addInsulation: boolean;
   insulationThickness: number;
   addSheathing: boolean;
@@ -151,21 +161,69 @@ const TexturedMaterial = ({
 
 // ─── Error boundary for texture loading — prevents Canvas crash ─────────
 class TextureErrorBoundary extends React.Component<
-  { children: React.ReactNode; fallback: React.ReactNode },
+  { children: React.ReactNode; fallback: React.ReactNode; resetKey?: string },
   { hasError: boolean }
 > {
-  constructor(props: { children: React.ReactNode; fallback: React.ReactNode }) {
+  constructor(props: { children: React.ReactNode; fallback: React.ReactNode; resetKey?: string }) {
     super(props);
     this.state = { hasError: false };
   }
   static getDerivedStateFromError() {
     return { hasError: true };
   }
+  static getDerivedStateFromProps(props: { resetKey?: string }, state: { hasError: boolean; lastResetKey?: string }) {
+    if (props.resetKey !== state.lastResetKey) {
+      return { hasError: false, lastResetKey: props.resetKey };
+    }
+    return null;
+  }
   componentDidCatch(error: Error) {
-    console.warn('[Texture] Failed to load texture:', error.message);
+    console.error('[Texture] Failed to load texture:', error.message, error);
   }
   render() {
     if (this.state.hasError) return this.props.fallback;
+    return this.props.children;
+  }
+}
+
+// ─── Error boundary for the entire 3D Canvas — prevents blank screen on crash ──
+class CanvasErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; errorMessage: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorMessage: '' };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, errorMessage: error?.message || 'Unknown error' };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[Preview3D] Canvas crashed:', error, info.componentStack);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-100 dark:bg-[#0f1424] rounded-xl border border-zinc-200 dark:border-[#1c2240]">
+          <div className="text-center max-w-md p-8">
+            <div className="text-4xl mb-4">⚠️</div>
+            <h3 className="text-lg font-bold text-zinc-800 dark:text-zinc-100 mb-2">3D Preview Error</h3>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
+              The 3D renderer encountered an error and couldn't display the preview.
+            </p>
+            <p className="text-xs text-zinc-400 dark:text-zinc-500 mb-6 font-mono bg-zinc-200 dark:bg-zinc-800 rounded px-3 py-2 break-all">
+              {this.state.errorMessage}
+            </p>
+            <button
+              onClick={() => this.setState({ hasError: false, errorMessage: '' })}
+              className="px-6 py-2.5 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-500 transition-colors"
+            >
+              Retry 3D Preview
+            </button>
+          </div>
+        </div>
+      );
+    }
     return this.props.children;
   }
 }
@@ -705,8 +763,8 @@ const Ground = () => {
     <mesh
       rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow
     >
-      <planeGeometry args={[2000, 2000]} />
-      <meshStandardMaterial color="#2d3a1a" roughness={1} />
+      <circleGeometry args={[10000, 64]} />
+      <meshStandardMaterial color="#6b7a3a" roughness={1} />
     </mesh>
   );
 };
@@ -1211,6 +1269,97 @@ const ClipControls = ({ isFloorPlanView, cutHeight }: { isFloorPlanView: boolean
   return null;
 }
 
+interface GirderData {
+  id: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  length: number;
+  posts: { x: number; y: number; id: string }[];
+  brackets: { x: number; y: number; id: string; type: 'start' | 'end' }[];
+}
+
+function computeGirdersForBay(
+  bay: { x: number; y: number; width: number; height: number; joistDirection: 'x' | 'y' },
+  enableGirderSystem: boolean,
+  girderSpanThresholdFt: number,
+  girderPostSpacingFt: number
+): GirderData[] {
+  if (!enableGirderSystem) return [];
+
+  const thresholdIn = girderSpanThresholdFt * 12;
+  const postSpacingIn = girderPostSpacingFt * 12;
+
+  const isSpanY = bay.joistDirection === 'y';
+  const spanIn = isSpanY ? bay.height : bay.width;
+  const girderLengthIn = isSpanY ? bay.width : bay.height;
+
+  if (spanIn <= thresholdIn) return [];
+
+  const numSpaces = Math.ceil(spanIn / thresholdIn);
+  const numGirders = numSpaces - 1;
+  const girders: GirderData[] = [];
+
+  for (let i = 1; i <= numGirders; i++) {
+    const offset = i * (spanIn / numSpaces);
+    
+    let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    if (isSpanY) {
+      x1 = bay.x;
+      y1 = bay.y + offset;
+      x2 = bay.x + bay.width;
+      y2 = y1;
+    } else {
+      x1 = bay.x + offset;
+      y1 = bay.y;
+      x2 = x1;
+      y2 = bay.y + bay.height;
+    }
+
+    const numPostSpaces = Math.max(1, Math.ceil(girderLengthIn / postSpacingIn));
+    const posts: { x: number; y: number; id: string }[] = [];
+    const brackets: { x: number; y: number; id: string; type: 'start' | 'end' }[] = [];
+
+    for (let j = 0; j <= numPostSpaces; j++) {
+      const pOffset = j * (girderLengthIn / numPostSpaces);
+      let px = 0, py = 0;
+      if (isSpanY) {
+        px = bay.x + pOffset;
+        py = y1;
+      } else {
+        px = x1;
+        py = bay.y + pOffset;
+      }
+
+      if (j === 0) {
+        brackets.push({ x: px, y: py, id: `bracket-${i}-start`, type: 'start' });
+      } else if (j === numPostSpaces) {
+        brackets.push({ x: px, y: py, id: `bracket-${i}-end`, type: 'end' });
+      } else {
+        posts.push({
+          x: px,
+          y: py,
+          id: `post-${i}-${j}`
+        });
+      }
+    }
+
+    girders.push({
+      id: `girder-${i}`,
+      x1,
+      y1,
+      x2,
+      y2,
+      length: girderLengthIn,
+      posts,
+      brackets
+    });
+  }
+
+  return girders;
+}
+
 export default function Preview3D({
   shape, widthIn, lengthIn, thicknessIn, lRightDepthIn, lBackWidthIn, uWallsIn,
   hLeftBarWidthIn, hRightBarWidthIn, hMiddleBarHeightIn, hMiddleBarOffsetIn,
@@ -1218,7 +1367,15 @@ export default function Preview3D({
   interiorWalls, exteriorWalls, doors, windows, bumpouts, wallHeightIn,
   foundationType, foundationShape, stemWallHeightIn, stemWallThicknessIn, footingWidthIn, footingThicknessIn,
   slabThicknessIn, thickenedEdgeDepthIn,
-  addFloorFraming, joistSpacing, joistSize, joistDirection, addSubfloor, subfloorThickness, subfloorMaterial, rimJoistThickness,
+  addFloorFraming, joistSpacing, joistSize, joistDirection, floorBays = [], addSubfloor, subfloorThickness, subfloorMaterial, rimJoistThickness,
+  enableGirderSystem = false,
+  girderSpanThresholdFt = 12,
+  girderPostSpacingFt = 8,
+  girderSize = '3-2x10',
+  girderPostSize = '6x6',
+  girderPierSize = '12" Round',
+  addPocketBeams = true,
+  pocketBeamsOnlyAtGirderEnds = false,
   addInsulation, insulationThickness, addSheathing, sheathingThickness, addDrywall, drywallThickness,
   studSpacing, studThickness, topPlates, bottomPlates, headerType, headerHeight,
   solidWallsOnly,
@@ -1244,6 +1401,81 @@ export default function Preview3D({
   const [cameraCaptureTrigger, setCameraCaptureTrigger] = useState<string | null>(null);
   const houseGroupRef = useRef<THREE.Group>(null);
   const [isExporting, setIsExporting] = useState(false);
+
+  const getExactFloorAreaSqFt = () => {
+    let areaSqIn = 0;
+    if (shape === 'rectangle') {
+      areaSqIn = widthIn * lengthIn;
+    } else if (shape === 'l-shape') {
+      areaSqIn = widthIn * lRightDepthIn + lBackWidthIn * (lengthIn - lRightDepthIn);
+    } else if (shape === 'u-shape') {
+      areaSqIn = uWallsIn.w7 * uWallsIn.w8 + 
+                 uWallsIn.w3 * uWallsIn.w2 + 
+                 (uWallsIn.w1 - uWallsIn.w3 - uWallsIn.w7) * (uWallsIn.w2 - uWallsIn.w4);
+    } else if (shape === 'h-shape') {
+      areaSqIn = hLeftBarWidthIn * lengthIn + 
+                 hRightBarWidthIn * lengthIn + 
+                 (widthIn - hLeftBarWidthIn - hRightBarWidthIn) * hMiddleBarHeightIn;
+    } else if (shape === 't-shape') {
+      areaSqIn = tTopWidthIn * tTopLengthIn + tStemWidthIn * tStemLengthIn;
+    } else if (shape === 'custom') {
+      const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
+      if (blocksToUse && blocksToUse.length > 0) {
+        areaSqIn = blocksToUse.reduce((sum, b) => sum + b.w * b.h, 0);
+      } else if (exteriorWalls.length > 0) {
+        const wallRects = exteriorWalls.map(w => {
+          let x = w.xFt * 12 + w.xInches;
+          let z = w.yFt * 12 + w.yInches;
+          let len = w.lengthFt * 12 + w.lengthInches;
+          const isH = w.orientation === 'horizontal';
+          let rw = isH ? len : w.thicknessIn;
+          let rd = isH ? w.thicknessIn : len;
+          if (rw < 0) { x += rw; rw = Math.abs(rw); }
+          if (rd < 0) { z += rd; rd = Math.abs(rd); }
+          if (isH && w.exteriorSide === 1) z -= w.thicknessIn;
+          else if (!isH && w.exteriorSide === 1) x -= w.thicknessIn;
+          return { x, z, w: rw, d: rd };
+        });
+        const xSet = new Set<number>();
+        const zSet = new Set<number>();
+        wallRects.forEach(r => { xSet.add(r.x); xSet.add(r.x + r.w); zSet.add(r.z); zSet.add(r.z + r.d); });
+        const xs = [...xSet].sort((a, b) => a - b);
+        const zs = [...zSet].sort((a, b) => a - b);
+        if (xs.length >= 2 && zs.length >= 2) {
+          const grid: boolean[][] = Array.from({ length: xs.length - 1 }, () => Array(zs.length - 1).fill(false));
+          for (let i = 0; i < xs.length - 1; i++) {
+            for (let j = 0; j < zs.length - 1; j++) {
+              const cx = (xs[i] + xs[i + 1]) / 2;
+              const cz = (zs[j] + zs[j + 1]) / 2;
+              if (wallRects.some(r => cx >= r.x && cx <= r.x + r.w && cz >= r.z && cz <= r.z + r.d)) grid[i][j] = true;
+            }
+          }
+          for (let j = 0; j < zs.length - 1; j++) {
+            let leftWall = -1;
+            for (let i = 0; i < xs.length - 1; i++) {
+              if (grid[i][j]) { if (leftWall >= 0) for (let k = leftWall; k <= i; k++) grid[k][j] = true; leftWall = i; }
+            }
+          }
+          for (let i = 0; i < xs.length - 1; i++) {
+            let topWall = -1;
+            for (let j = 0; j < zs.length - 1; j++) {
+              if (grid[i][j]) { if (topWall >= 0) for (let k = topWall; k <= j; k++) grid[i][k] = true; topWall = j; }
+            }
+          }
+          for (let i = 0; i < xs.length - 1; i++) {
+            for (let j = 0; j < zs.length - 1; j++) {
+              if (grid[i][j]) {
+                const cellW = xs[i + 1] - xs[i];
+                const cellD = zs[j + 1] - zs[j];
+                areaSqIn += cellW * cellD;
+              }
+            }
+          }
+        }
+      }
+    }
+    return areaSqIn / 144;
+  };
 
   const handleExportGLB = async () => {
     if (!houseGroupRef.current) return;
@@ -1922,7 +2154,7 @@ export default function Preview3D({
     };
 
     // 1st Floor
-    if (currentFloorIndex === 0) {
+    if (currentFloorIndex >= 0) {
       addWallsForStory(totalBaseHeight, wallHeightIn, 0);
     }
 
@@ -1933,7 +2165,7 @@ export default function Preview3D({
       const upperFloorSystemH = upperJoistH + (addSubfloor ? subfloorThickness : 0);
       currentZ += upperFloorSystemH;
       
-      if (currentFloorIndex === i + 1) {
+      if (currentFloorIndex >= i + 1) {
         addWallsForStory(currentZ, upperFloorWallHeightIn, i + 1);
       }
       
@@ -1942,33 +2174,6 @@ export default function Preview3D({
 
     return { wallList, framingList };
   }, [shape, widthIn, lengthIn, thicknessIn, lRightDepthIn, lBackWidthIn, uWallsIn, exteriorWalls, interiorWalls, bumpouts, wallHeightIn, totalBaseHeight, addSheathing, sheathingThickness, addInsulation, insulationThickness, addDrywall, drywallThickness, additionalStories, upperFloorWallHeightIn, upperFloorJoistSize, addSubfloor, subfloorThickness, currentFloorIndex, solidWallsOnly, studSpacing, studThickness, bottomPlates, topPlates, headerType, headerHeight, doors, windows]);
-
-  // ── Compute surface areas for each paintable surface ──────────────────
-  // This runs after the walls memo and populates surfaceAreasRef
-  // so handleSurfacePainted can look up the area when a surface is clicked.
-  useEffect(() => {
-    const areas: Record<string, number> = {};
-    walls.wallList.forEach((w, i) => {
-      const isExt = w.color === "#e4e4e7" || w.color === "#c4a484";
-      const isDrywall = w.color === "#ffffff";
-      const surfaceId = isExt ? `ext-wall-${i}` : isDrywall ? `drywall-${i}` : `int-wall-${i}`;
-      // Painted face area = length × height  (the larger of w/d is the length, smaller is thickness)
-      const faceArea = Math.max(w.w, w.d) * w.h / 144; // sq in → sq ft
-      areas[surfaceId] = Math.round(faceArea * 100) / 100;
-    });
-    // Foundation surfaces (stem walls, slab edges)
-    if (foundationType !== 'none' && stemWallHeightIn > 0) {
-      const perimeterIn = (widthIn + lengthIn) * 2; // simplified for rectangle
-      const foundAreaSqFt = (perimeterIn * stemWallHeightIn) / 144;
-      areas['foundation'] = Math.round(foundAreaSqFt * 100) / 100;
-    }
-    // Ground/floor area
-    const floorAreaSqFt = (widthIn * lengthIn) / 144;
-    areas['ground'] = Math.round(floorAreaSqFt * 100) / 100;
-    areas['floor'] = Math.round(floorAreaSqFt * 100) / 100;
-
-    surfaceAreasRef.current = areas;
-  }, [walls, foundationType, stemWallHeightIn, widthIn, lengthIn]);
 
   const roofs = useMemo(() => {
     const totalWallHeight = wallHeightIn + (additionalStories * upperFloorWallHeightIn);
@@ -1993,6 +2198,101 @@ export default function Preview3D({
       };
     });
   }, [roofParts, totalBaseHeight, wallHeightIn, additionalStories, upperFloorWallHeightIn]);
+
+  // ── Compute surface areas for each paintable surface ──────────────────
+  // This runs after the walls memo and populates surfaceAreasRef
+  // so handleSurfacePainted can look up the area when a surface is clicked.
+  useEffect(() => {
+    const areas: Record<string, number> = {};
+    walls.wallList.forEach((w, i) => {
+      const isExt = w.color === "#e4e4e7" || w.color === "#c4a484";
+      const isDrywall = w.color === "#ffffff";
+      const surfaceId = isExt ? `ext-wall-${i}` : isDrywall ? `drywall-${i}` : `int-wall-${i}`;
+      // Painted face area = length × height  (the larger of w/d is the length, smaller is thickness)
+      const faceArea = Math.max(w.w, w.d) * w.h / 144; // sq in → sq ft
+      areas[surfaceId] = Math.round(faceArea * 100) / 100;
+    });
+    // Foundation surfaces (stem walls, slab edges)
+    if (foundationType !== 'none' && stemWallHeightIn > 0) {
+      const perimeterIn = (widthIn + lengthIn) * 2; // simplified for rectangle
+      const foundAreaSqFt = (perimeterIn * stemWallHeightIn) / 144;
+      areas['foundation'] = Math.round(foundAreaSqFt * 100) / 100;
+    }
+    // Ground/floor area
+    const exactFloorAreaSqFt = getExactFloorAreaSqFt();
+    areas['ground'] = Math.round(exactFloorAreaSqFt * 100) / 100;
+    areas['floor'] = Math.round(exactFloorAreaSqFt * 100) / 100;
+    areas['floor-finish'] = Math.round(exactFloorAreaSqFt * 100) / 100;
+
+    // Roof surfaces for standard roofs
+    roofs.forEach((roof, i) => {
+      const W = roof.ridgeDirection === 'horizontal' ? roof.width + 2 * roof.overhang : roof.length + 2 * roof.overhang;
+      const L = roof.ridgeDirection === 'horizontal' ? roof.length + 2 * roof.overhang : roof.width + 2 * roof.overhang;
+      const H = roof.ridgeHeight;
+
+      if (roof.type === 'gable') {
+        const slopeLen = Math.sqrt((W / 2) * (W / 2) + H * H);
+        const slopeArea = (slopeLen * L) / 144;
+        const gableEndArea = (0.5 * W * H) / 144;
+
+        areas[`roof-${i}-slope-left`] = Math.round(slopeArea * 100) / 100;
+        areas[`roof-${i}-slope-right`] = Math.round(slopeArea * 100) / 100;
+        areas[`roof-${i}-end-front`] = Math.round(gableEndArea * 100) / 100;
+        areas[`roof-${i}-end-back`] = Math.round(gableEndArea * 100) / 100;
+      }
+      else if (roof.type === 'hip') {
+        const pitchFactor = Math.sqrt(1 + (H / (W / 2)) * (H / (W / 2)));
+        const totalRoofArea = (W * L * pitchFactor) / 144;
+        const perSlopeArea = totalRoofArea / 4;
+
+        areas[`roof-${i}-slope-front`] = Math.round(perSlopeArea * 100) / 100;
+        areas[`roof-${i}-slope-back`] = Math.round(perSlopeArea * 100) / 100;
+        areas[`roof-${i}-slope-left`] = Math.round(perSlopeArea * 100) / 100;
+        areas[`roof-${i}-slope-right`] = Math.round(perSlopeArea * 100) / 100;
+      }
+      else if (roof.type === 'shed') {
+        const slopeLen = Math.sqrt(W * W + H * H);
+        const slopeArea = (slopeLen * L) / 144;
+        const endArea = (0.5 * W * H) / 144;
+
+        areas[`roof-${i}-slope`] = Math.round(slopeArea * 100) / 100;
+        areas[`roof-${i}-end-left`] = Math.round(endArea * 100) / 100;
+        areas[`roof-${i}-end-right`] = Math.round(endArea * 100) / 100;
+      }
+    });
+
+    // Roof surfaces for Solid Shell (custom corner roofs / trussRuns)
+    trussRuns.forEach(run => {
+      if (run.type === 'Solid Shell') {
+        const overhang = 12; // default
+        const w = run.widthFt * 12;
+        const d = run.lengthFt * 12;
+        const eaveDrop = run.eaveDropIn !== undefined ? run.eaveDropIn : 0;
+        const height = (run.spanFt * 12 / 2) * (run.pitch / 12) + eaveDrop;
+
+        const W = w + 2 * overhang;
+        const L = d + 2 * overhang;
+        const H = height;
+
+        const slopeLen = Math.sqrt((W / 2) * (W / 2) + H * H);
+        const slopeArea = (slopeLen * L) / 144;
+        const gableEndArea = (0.5 * W * H) / 144;
+
+        areas[`truss-shell-${run.id}-slope-left`] = Math.round(slopeArea * 100) / 100;
+        areas[`truss-shell-${run.id}-slope-right`] = Math.round(slopeArea * 100) / 100;
+        areas[`truss-shell-${run.id}-end-front`] = Math.round(gableEndArea * 100) / 100;
+        areas[`truss-shell-${run.id}-end-back`] = Math.round(gableEndArea * 100) / 100;
+        areas[`truss-shell-${run.id}-underside`] = Math.round(((W * L) / 144) * 100) / 100;
+      }
+    });
+
+    surfaceAreasRef.current = areas;
+  }, [
+    walls, foundationType, stemWallHeightIn, widthIn, lengthIn, roofs, trussRuns,
+    shape, lRightDepthIn, lBackWidthIn, uWallsIn, hLeftBarWidthIn, hRightBarWidthIn,
+    hMiddleBarHeightIn, hMiddleBarOffsetIn, tTopWidthIn, tTopLengthIn, tStemWidthIn,
+    tStemLengthIn, combinedBlocks, shapeBlocks, exteriorWalls
+  ]);
 
   const foundation = useMemo(() => {
     if (currentFloorIndex !== 0) return [];
@@ -2286,9 +2586,87 @@ export default function Preview3D({
         parts.push({ x: stemX, y: 0, z: tTopLengthIn, w: tStemWidthIn, h: slab_h, d: tStemLengthIn, color: "#a1a1aa" });
       } else if (foundationShape === 'custom') {
         const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
-        blocksToUse.forEach(block => {
-          parts.push({ x: block.x, y: 0, z: block.y, w: block.w, h: slab_h, d: block.h, color: "#a1a1aa" });
-        });
+        if (blocksToUse && blocksToUse.length > 0) {
+          blocksToUse.forEach(block => {
+            parts.push({ x: block.x, y: 0, z: block.y, w: block.w, h: slab_h, d: block.h, color: "#a1a1aa" });
+          });
+        } else if (exteriorWalls.length > 0) {
+          // Derive slab footprint from exterior walls using a grid-fill approach
+          const wallRects = exteriorWalls.map(w => {
+            let x = w.xFt * 12 + w.xInches;
+            let z = w.yFt * 12 + w.yInches;
+            let len = w.lengthFt * 12 + w.lengthInches;
+            const isH = w.orientation === 'horizontal';
+            let rw = isH ? len : w.thicknessIn;
+            let rd = isH ? w.thicknessIn : len;
+            if (rw < 0) { x += rw; rw = Math.abs(rw); }
+            if (rd < 0) { z += rd; rd = Math.abs(rd); }
+            if (isH && w.exteriorSide === 1) z -= w.thicknessIn;
+            else if (!isH && w.exteriorSide === 1) x -= w.thicknessIn;
+            return { x, z, w: rw, d: rd };
+          });
+          // Collect unique X and Y breakpoints
+          const xSet = new Set<number>();
+          const zSet = new Set<number>();
+          wallRects.forEach(r => { xSet.add(r.x); xSet.add(r.x + r.w); zSet.add(r.z); zSet.add(r.z + r.d); });
+          const xs = [...xSet].sort((a, b) => a - b);
+          const zs = [...zSet].sort((a, b) => a - b);
+          if (xs.length >= 2 && zs.length >= 2) {
+            // Build grid and mark cells that overlap with any wall
+            const grid: boolean[][] = Array.from({ length: xs.length - 1 }, () => Array(zs.length - 1).fill(false));
+            for (let i = 0; i < xs.length - 1; i++) {
+              for (let j = 0; j < zs.length - 1; j++) {
+                const cx = (xs[i] + xs[i + 1]) / 2;
+                const cz = (zs[j] + zs[j + 1]) / 2;
+                if (wallRects.some(r => cx >= r.x && cx <= r.x + r.w && cz >= r.z && cz <= r.z + r.d)) {
+                  grid[i][j] = true;
+                }
+              }
+            }
+            // Flood-fill interior: find cells bounded by wall cells on all sides
+            // Simple approach: fill any cell whose row has walls on both left and right
+            for (let j = 0; j < zs.length - 1; j++) {
+              let leftWall = -1;
+              for (let i = 0; i < xs.length - 1; i++) {
+                if (grid[i][j]) {
+                  if (leftWall >= 0) {
+                    // Fill all cells between leftWall and current wall
+                    for (let k = leftWall; k <= i; k++) {
+                      grid[k][j] = true;
+                    }
+                  }
+                  leftWall = i;
+                }
+              }
+            }
+            // Also fill vertically: any cell with walls above and below
+            for (let i = 0; i < xs.length - 1; i++) {
+              let topWall = -1;
+              for (let j = 0; j < zs.length - 1; j++) {
+                if (grid[i][j]) {
+                  if (topWall >= 0) {
+                    for (let k = topWall; k <= j; k++) {
+                      grid[i][k] = true;
+                    }
+                  }
+                  topWall = j;
+                }
+              }
+            }
+            // Emit filled cells as slab parts
+            for (let i = 0; i < xs.length - 1; i++) {
+              for (let j = 0; j < zs.length - 1; j++) {
+                if (grid[i][j]) {
+                  const cellW = xs[i + 1] - xs[i];
+                  const cellD = zs[j + 1] - zs[j];
+                  if (cellW > 0.01 && cellD > 0.01) {
+                    parts.push({ x: xs[i], y: 0, z: zs[j], w: cellW, h: slab_h, d: cellD, color: "#a1a1aa" });
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
 
@@ -2438,7 +2816,7 @@ export default function Preview3D({
     };
 
     // 1st Floor
-    if (currentFloorIndex === 0) {
+    if (currentFloorIndex >= 0) {
       calculateOpeningsForStory(totalBaseHeight, wallHeightIn, 0);
     }
 
@@ -2448,7 +2826,7 @@ export default function Preview3D({
       const upperJoistH = upperFloorJoistSize === '2x6' ? 5.5 : upperFloorJoistSize === '2x8' ? 7.25 : upperFloorJoistSize === '2x10' ? 9.25 : 11.25;
       const upperFloorSystemH = upperJoistH + (addSubfloor ? subfloorThickness : 0);
       currentZ += upperFloorSystemH;
-      if (currentFloorIndex === i + 1) {
+      if (currentFloorIndex >= i + 1) {
         calculateOpeningsForStory(currentZ, upperFloorWallHeightIn, i + 1);
       }
       currentZ += upperFloorWallHeightIn;
@@ -2532,12 +2910,12 @@ export default function Preview3D({
       });
     };
 
-    if (currentFloorIndex === 0) calcForStory(totalBaseHeight, 0);
+    if (currentFloorIndex >= 0) calcForStory(totalBaseHeight, 0);
     let currentZ = totalBaseHeight + wallHeightIn;
     for (let i = 0; i < additionalStories; i++) {
       const upperJoistH = upperFloorJoistSize === '2x6' ? 5.5 : upperFloorJoistSize === '2x8' ? 7.25 : upperFloorJoistSize === '2x10' ? 9.25 : 11.25;
       currentZ += upperJoistH + (addSubfloor ? subfloorThickness : 0);
-      if (currentFloorIndex === i + 1) calcForStory(currentZ, i + 1);
+      if (currentFloorIndex >= i + 1) calcForStory(currentZ, i + 1);
       currentZ += upperFloorWallHeightIn;
     }
 
@@ -2577,10 +2955,105 @@ export default function Preview3D({
           parts.push({ x: stemX, y: currentY, z: tTopLengthIn, w: tStemWidthIn, h: joistH, d: tStemLengthIn, color: floorColor });
         } else if (shape === 'custom') {
           const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
-          blocksToUse.forEach(block => {
-            parts.push({ x: block.x, y: currentY, z: block.y, w: block.w, h: joistH, d: block.h, color: floorColor });
-          });
+          if (blocksToUse && blocksToUse.length > 0) {
+            blocksToUse.forEach(block => {
+              parts.push({ x: block.x, y: currentY, z: block.y, w: block.w, h: joistH, d: block.h, color: floorColor });
+            });
+          } else if (exteriorWalls.length > 0) {
+            // Derive floor footprint from exterior walls using grid-fill
+            const wallRects = exteriorWalls.map(w => {
+              let x = w.xFt * 12 + w.xInches;
+              let z = w.yFt * 12 + w.yInches;
+              let len = w.lengthFt * 12 + w.lengthInches;
+              const isH = w.orientation === 'horizontal';
+              let rw = isH ? len : w.thicknessIn;
+              let rd = isH ? w.thicknessIn : len;
+              if (rw < 0) { x += rw; rw = Math.abs(rw); }
+              if (rd < 0) { z += rd; rd = Math.abs(rd); }
+              if (isH && w.exteriorSide === 1) z -= w.thicknessIn;
+              else if (!isH && w.exteriorSide === 1) x -= w.thicknessIn;
+              return { x, z, w: rw, d: rd };
+            });
+            const xSet = new Set<number>();
+            const zSet = new Set<number>();
+            wallRects.forEach(r => { xSet.add(r.x); xSet.add(r.x + r.w); zSet.add(r.z); zSet.add(r.z + r.d); });
+            const xs = [...xSet].sort((a, b) => a - b);
+            const zs = [...zSet].sort((a, b) => a - b);
+            if (xs.length >= 2 && zs.length >= 2) {
+              const grid: boolean[][] = Array.from({ length: xs.length - 1 }, () => Array(zs.length - 1).fill(false));
+              for (let i = 0; i < xs.length - 1; i++) {
+                for (let j = 0; j < zs.length - 1; j++) {
+                  const cx = (xs[i] + xs[i + 1]) / 2;
+                  const cz = (zs[j] + zs[j + 1]) / 2;
+                  if (wallRects.some(r => cx >= r.x && cx <= r.x + r.w && cz >= r.z && cz <= r.z + r.d)) grid[i][j] = true;
+                }
+              }
+              for (let j = 0; j < zs.length - 1; j++) {
+                let leftWall = -1;
+                for (let i = 0; i < xs.length - 1; i++) {
+                  if (grid[i][j]) { if (leftWall >= 0) for (let k = leftWall; k <= i; k++) grid[k][j] = true; leftWall = i; }
+                }
+              }
+              for (let i = 0; i < xs.length - 1; i++) {
+                let topWall = -1;
+                for (let j = 0; j < zs.length - 1; j++) {
+                  if (grid[i][j]) { if (topWall >= 0) for (let k = topWall; k <= j; k++) grid[i][k] = true; topWall = j; }
+                }
+              }
+              for (let i = 0; i < xs.length - 1; i++) {
+                for (let j = 0; j < zs.length - 1; j++) {
+                  if (grid[i][j]) {
+                    const cellW = xs[i + 1] - xs[i];
+                    const cellD = zs[j + 1] - zs[j];
+                    if (cellW > 0.01 && cellD > 0.01) {
+                      parts.push({ x: xs[i], y: currentY, z: zs[j], w: cellW, h: joistH, d: cellD, color: floorColor });
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
+      } else if (floorBays && floorBays.length > 0) {
+        // ── Per-bay joist rendering ──
+        const joistH = currentJoistSize === '2x6' ? 5.5 : currentJoistSize === '2x8' ? 7.25 : currentJoistSize === '2x10' ? 9.25 : 11.25;
+        const t_joist = 1.5;
+
+        floorBays.forEach(bay => {
+          const bx = bay.x;
+          const bz = bay.y; // bay.y maps to Z in 3D
+          const bw = bay.width;
+          const bh = bay.height;
+          const dir = bay.joistDirection;
+
+          if (dir === 'y') {
+            // Joists spaced along Y (X-axis in 3D), each runs along Z
+            // Rim joists: front and back of bay
+            parts.push({ x: bx, y: currentY, z: bz, w: bw, h: joistH, d: rt, color: "#a1a1aa" });
+            parts.push({ x: bx, y: currentY, z: bz + bh - rt, w: bw, h: joistH, d: rt, color: "#a1a1aa" });
+            // Individual joists spaced along X
+            const numJ = Math.ceil(bw / joistSpacing) + 1;
+            for (let i = 0; i < numJ; i++) {
+              let jx = bx + i * joistSpacing;
+              if (jx + t_joist > bx + bw) jx = bx + bw - t_joist;
+              if (jx < bx) jx = bx;
+              parts.push({ x: jx, y: currentY, z: bz + rt, w: t_joist, h: joistH, d: bh - 2 * rt, color: "#d4d4d8" });
+            }
+          } else {
+            // Joists spaced along Z, each runs along X
+            // Rim joists: left and right of bay
+            parts.push({ x: bx, y: currentY, z: bz, w: rt, h: joistH, d: bh, color: "#a1a1aa" });
+            parts.push({ x: bx + bw - rt, y: currentY, z: bz, w: rt, h: joistH, d: bh, color: "#a1a1aa" });
+            // Individual joists spaced along Z
+            const numJ = Math.ceil(bh / joistSpacing) + 1;
+            for (let i = 0; i < numJ; i++) {
+              let jz = bz + i * joistSpacing;
+              if (jz + t_joist > bz + bh) jz = bz + bh - t_joist;
+              if (jz < bz) jz = bz;
+              parts.push({ x: bx + rt, y: currentY, z: jz, w: bw - 2 * rt, h: joistH, d: t_joist, color: "#d4d4d8" });
+            }
+          }
+        });
       } else if (joistDirection === 'y') {
         // Rim joists (front and back)
         parts.push({ x: 0, y: currentY, z: 0, w: widthIn, h: joistH, d: rt, color: "#a1a1aa" });
@@ -2609,10 +3082,11 @@ export default function Preview3D({
           });
         }
 
-        const numJoists = Math.ceil(widthIn / joistSpacing) + 1;
+        const limitW = shape === 't-shape' ? tTopWidthIn : widthIn;
+        const numJoists = Math.ceil(limitW / joistSpacing) + 1;
         for (let i = 0; i < numJoists; i++) {
           let jx = i * joistSpacing;
-          if (jx + t > widthIn) jx = widthIn - t;
+          if (jx + t > limitW) jx = limitW - t;
           
           if (shape === 'rectangle') {
             parts.push({ x: jx, y: currentY, z: rt, w: t, h: joistH, d: lengthIn - 2 * rt, color: "#d4d4d8" });
@@ -2634,7 +3108,7 @@ export default function Preview3D({
               parts.push({ x: jx, y: currentY, z: hMiddleBarOffsetIn + rt, w: t, h: joistH, d: hMiddleBarHeightIn - 2 * rt, color: "#d4d4d8" });
             }
           } else if (shape === 't-shape') {
-            if (jx >= (widthIn - tStemWidthIn) / 2.0 && jx <= (widthIn + tStemWidthIn) / 2.0) {
+            if (jx >= (tTopWidthIn - tStemWidthIn) / 2.0 && jx <= (tTopWidthIn + tStemWidthIn) / 2.0) {
               parts.push({ x: jx, y: currentY, z: rt, w: t, h: joistH, d: tTopLengthIn + tStemLengthIn - 2 * rt, color: "#d4d4d8" });
             } else {
               parts.push({ x: jx, y: currentY, z: rt, w: t, h: joistH, d: tTopLengthIn - 2 * rt, color: "#d4d4d8" });
@@ -2666,9 +3140,9 @@ export default function Preview3D({
           parts.push({ x: widthIn - hRightBarWidthIn - rt, y: currentY, z: hMiddleBarOffsetIn, w: rt, h: joistH, d: hMiddleBarHeightIn, color: "#a1a1aa" });
         } else if (shape === 't-shape') {
           parts.push({ x: 0, y: currentY, z: 0, w: rt, h: joistH, d: tTopLengthIn, color: "#a1a1aa" });
-          parts.push({ x: widthIn - rt, y: currentY, z: 0, w: rt, h: joistH, d: tTopLengthIn, color: "#a1a1aa" });
-          parts.push({ x: (widthIn - tStemWidthIn) / 2.0, y: currentY, z: tTopLengthIn, w: rt, h: joistH, d: tStemLengthIn, color: "#a1a1aa" });
-          parts.push({ x: (widthIn + tStemWidthIn) / 2.0 - rt, y: currentY, z: tTopLengthIn, w: rt, h: joistH, d: tStemLengthIn, color: "#a1a1aa" });
+          parts.push({ x: tTopWidthIn - rt, y: currentY, z: 0, w: rt, h: joistH, d: tTopLengthIn, color: "#a1a1aa" });
+          parts.push({ x: (tTopWidthIn - tStemWidthIn) / 2.0, y: currentY, z: tTopLengthIn, w: rt, h: joistH, d: tStemLengthIn, color: "#a1a1aa" });
+          parts.push({ x: (tTopWidthIn + tStemWidthIn) / 2.0 - rt, y: currentY, z: tTopLengthIn, w: rt, h: joistH, d: tStemLengthIn, color: "#a1a1aa" });
         } else if (shape === 'custom') {
           // For custom shapes, we use the combinedBlocks to draw the floor system
           const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
@@ -2678,7 +3152,7 @@ export default function Preview3D({
             parts.push({ x: block.x + block.w - rt, y: currentY, z: block.y, w: rt, h: joistH, d: block.h, color: "#a1a1aa" });
             parts.push({ x: block.x + rt, y: currentY, z: block.y, w: block.w - 2 * rt, h: joistH, d: rt, color: "#a1a1aa" });
             parts.push({ x: block.x + rt, y: currentY, z: block.y + block.h - rt, w: block.w - 2 * rt, h: joistH, d: rt, color: "#a1a1aa" });
-
+ 
             // Joists for each block
             const numJoists = Math.ceil(block.h / joistSpacing) + 1;
             for (let i = 0; i < numJoists; i++) {
@@ -2688,11 +3162,12 @@ export default function Preview3D({
             }
           });
         }
-
-        const numJoists = Math.ceil(lengthIn / joistSpacing) + 1;
+ 
+        const limitL = shape === 't-shape' ? (tTopLengthIn + tStemLengthIn) : lengthIn;
+        const numJoists = Math.ceil(limitL / joistSpacing) + 1;
         for (let i = 0; i < numJoists; i++) {
           let jz = i * joistSpacing;
-          if (jz + t > lengthIn) jz = lengthIn - t;
+          if (jz + t > limitL) jz = limitL - t;
           
           if (shape === 'rectangle') {
             parts.push({ x: rt, y: currentY, z: jz, w: widthIn - 2 * rt, h: joistH, d: t, color: "#d4d4d8" });
@@ -2719,9 +3194,9 @@ export default function Preview3D({
             }
           } else if (shape === 't-shape') {
             if (jz < tTopLengthIn) {
-              parts.push({ x: rt, y: currentY, z: jz, w: widthIn - 2 * rt, h: joistH, d: t, color: "#d4d4d8" });
+              parts.push({ x: rt, y: currentY, z: jz, w: tTopWidthIn - 2 * rt, h: joistH, d: t, color: "#d4d4d8" });
             } else {
-              parts.push({ x: (widthIn - tStemWidthIn) / 2.0 + rt, y: currentY, z: jz, w: tStemWidthIn - 2 * rt, h: joistH, d: t, color: "#d4d4d8" });
+              parts.push({ x: (tTopWidthIn - tStemWidthIn) / 2.0 + rt, y: currentY, z: jz, w: tStemWidthIn - 2 * rt, h: joistH, d: t, color: "#d4d4d8" });
             }
           }
         }
@@ -2757,14 +3232,14 @@ export default function Preview3D({
     };
 
     // 1st Floor
-    if (currentFloorIndex === 0) {
+    if (currentFloorIndex >= 0) {
       addFloorForStory(foundationHeight, joistSize);
     }
 
     // Upper Floors
     let currentZ = foundationHeight + floorSystemHeight + wallHeightIn;
     for (let i = 0; i < additionalStories; i++) {
-      if (currentFloorIndex === i + 1) {
+      if (currentFloorIndex >= i + 1) {
         addFloorForStory(currentZ, upperFloorJoistSize);
       }
       
@@ -2774,7 +3249,354 @@ export default function Preview3D({
     }
 
     return parts;
-  }, [addFloorFraming, joistSpacing, joistSize, joistDirection, addSubfloor, subfloorThickness, subfloorMaterial, widthIn, lengthIn, shape, lBackWidthIn, lRightDepthIn, uWallsIn, foundationHeight, floorSystemHeight, wallHeightIn, additionalStories, upperFloorWallHeightIn, upperFloorJoistSize, combinedBlocks, currentFloorIndex, foundationType]);
+  }, [addFloorFraming, noFramingFloorOnly, joistSpacing, joistSize, joistDirection, floorBays, addSubfloor, subfloorThickness, subfloorMaterial, rimJoistThickness, widthIn, lengthIn, shape, lBackWidthIn, lRightDepthIn, uWallsIn, hLeftBarWidthIn, hRightBarWidthIn, hMiddleBarHeightIn, hMiddleBarOffsetIn, tTopWidthIn, tTopLengthIn, tStemWidthIn, tStemLengthIn, foundationHeight, floorSystemHeight, wallHeightIn, additionalStories, upperFloorWallHeightIn, upperFloorJoistSize, combinedBlocks, shapeBlocks, exteriorWalls, currentFloorIndex, foundationType]);
+
+  interface Girder3DBeam {
+    id: string;
+    x: number;
+    y: number;
+    z: number;
+    w: number;
+    h: number;
+    d: number;
+    isPocketBeam?: boolean;
+  }
+  interface Girder3DPost {
+    id: string;
+    x: number;
+    y: number;
+    z: number;
+    w: number;
+    h: number;
+    d: number;
+  }
+  interface Girder3DPier {
+    id: string;
+    x: number;
+    y: number;
+    z: number;
+    radius?: number; // for round
+    w?: number; // for square
+    h: number; // overall height
+    d?: number; // for square
+    type: 'round' | 'square';
+  }
+  interface Girder3DBracket {
+    id: string;
+    x: number;
+    y: number;
+    z: number;
+    w: number;
+    h: number;
+    d: number;
+    isWoodToWood?: boolean;
+  }
+
+  const girderSystem3D = useMemo(() => {
+    const beams: Girder3DBeam[] = [];
+    const posts: Girder3DPost[] = [];
+    const piers: Girder3DPier[] = [];
+    const brackets: Girder3DBracket[] = [];
+
+    if (!enableGirderSystem || !addFloorFraming) {
+      return { beams, posts, piers, brackets };
+    }
+
+    const mockState = {
+      shape,
+      widthFt: Math.floor(widthIn / 12),
+      widthInches: widthIn % 12,
+      lengthFt: Math.floor(lengthIn / 12),
+      lengthInches: lengthIn % 12,
+      lRightDepthFt: Math.floor(lRightDepthIn / 12),
+      lRightDepthInches: lRightDepthIn % 12,
+      lBackWidthFt: Math.floor(lBackWidthIn / 12),
+      lBackWidthInches: lBackWidthIn % 12,
+      lDirection: lDirection || 'back-right',
+      uWalls: {
+        w1: Math.floor(uWallsIn.w1 / 12),
+        w2: Math.floor(uWallsIn.w2 / 12),
+        w3: Math.floor(uWallsIn.w3 / 12),
+        w4: Math.floor(uWallsIn.w4 / 12),
+        w5: Math.floor(uWallsIn.w5 / 12),
+        w6: Math.floor(uWallsIn.w6 / 12),
+        w7: Math.floor(uWallsIn.w7 / 12),
+        w8: Math.floor(uWallsIn.w8 / 12),
+      },
+      uWallsInches: {
+        w1: uWallsIn.w1 % 12,
+        w2: uWallsIn.w2 % 12,
+        w3: uWallsIn.w3 % 12,
+        w4: uWallsIn.w4 % 12,
+        w5: uWallsIn.w5 % 12,
+        w6: uWallsIn.w6 % 12,
+        w7: uWallsIn.w7 % 12,
+        w8: uWallsIn.w8 % 12,
+      },
+      uDirection: 'back',
+      hLeftBarWidthFt: Math.floor(hLeftBarWidthIn / 12),
+      hLeftBarWidthInches: hLeftBarWidthIn % 12,
+      hRightBarWidthFt: Math.floor(hRightBarWidthIn / 12),
+      hRightBarWidthInches: hRightBarWidthIn % 12,
+      hMiddleBarHeightFt: Math.floor(hMiddleBarHeightIn / 12),
+      hMiddleBarHeightInches: hMiddleBarHeightIn % 12,
+      hMiddleBarOffsetFt: Math.floor(hMiddleBarOffsetIn / 12),
+      hMiddleBarOffsetInches: hMiddleBarOffsetIn % 12,
+      tTopWidthFt: Math.floor(tTopWidthIn / 12),
+      tTopWidthInches: tTopWidthIn % 12,
+      tTopLengthFt: Math.floor(tTopLengthIn / 12),
+      tTopLengthInches: tTopLengthIn % 12,
+      tStemWidthFt: Math.floor(tStemWidthIn / 12),
+      tStemWidthInches: tStemWidthIn % 12,
+      tStemLengthFt: Math.floor(tStemLengthIn / 12),
+      tStemLengthInches: tStemLengthIn % 12,
+      combinedBlocks,
+      shapeBlocks,
+    } as any;
+
+    const activeBays = floorBays && floorBays.length > 0 ? floorBays : detectBays(mockState);
+    const parsedBays = activeBays.map(bay => {
+      const direction = floorBays && floorBays.length > 0 ? bay.joistDirection : joistDirection;
+      return { ...bay, joistDirection: direction };
+    });
+
+    let beamWidth = 4.5;
+    let beamDepth = 9.25;
+
+    if (girderSize === '2-2x10') {
+      beamWidth = 3.0;
+    } else if (girderSize === '4-2x10') {
+      beamWidth = 6.0;
+    } else if (girderSize === '6x6') {
+      beamWidth = 5.5;
+      beamDepth = 5.5;
+    } else if (girderSize === '6x8') {
+      beamWidth = 5.5;
+      beamDepth = 7.5;
+    }
+
+    const postDim = girderPostSize === '4x4' ? 3.5 : 5.5;
+    const isRound = girderPierSize.includes('Round');
+    const pierDiameter = 12;
+    const pierSquareSize = 16;
+    const revealIn = Math.min(6, Math.max(0, foundationHeight - beamDepth));
+    const depthIn = 24;
+    const pierHeight = revealIn + depthIn;
+
+    const supportSystem = computeFramingSupportSystem({
+      enableGirderSystem,
+      addFloorFraming,
+      girderSpanThresholdFt,
+      girderPostSpacingFt,
+      addPocketBeams,
+      pocketBeamsOnlyAtGirderEnds
+    }, parsedBays);
+
+    // 1. Add Pocket Beams
+    supportSystem.pocketBeams.forEach((pb) => {
+      const isSpanY = pb.dir === 'y';
+      let bx = 0, bz = 0, bw = 0, bd = 0;
+      
+      if (isSpanY) {
+        // Runs vertically in 2D layout -> Z axis in Three.js
+        bw = beamWidth;
+        bd = pb.length;
+        bx = pb.coord - beamWidth / 2;
+        bz = pb.start;
+      } else {
+        // Runs horizontally in 2D layout -> X axis in Three.js
+        bw = pb.length;
+        bd = beamWidth;
+        bx = pb.start;
+        bz = pb.coord - beamWidth / 2;
+      }
+
+      const by = foundationHeight - beamDepth;
+
+      beams.push({
+        id: pb.id,
+        x: bx,
+        y: by,
+        z: bz,
+        w: bw,
+        h: beamDepth,
+        d: bd,
+        isPocketBeam: true
+      });
+
+      // Posts & Piers along pocket beam
+      pb.posts.forEach((post, idx) => {
+        const postTop = foundationHeight - beamDepth;
+        const postBottom = revealIn;
+        const postHeight = Math.max(0, postTop - postBottom);
+
+        if (postHeight > 0.01) {
+          posts.push({
+            id: `${pb.id}-post-${idx}`,
+            x: post.x - postDim / 2,
+            y: postBottom,
+            z: post.y - postDim / 2,
+            w: postDim,
+            h: postHeight,
+            d: postDim
+          });
+        }
+
+        piers.push({
+          id: `${pb.id}-pier-${idx}`,
+          x: post.x,
+          y: (revealIn - depthIn) / 2,
+          z: post.y,
+          radius: isRound ? pierDiameter / 2 : undefined,
+          w: !isRound ? pierSquareSize : undefined,
+          h: pierHeight,
+          d: !isRound ? pierSquareSize : undefined,
+          type: isRound ? 'round' : 'square'
+        });
+      });
+
+      // Pocket beam perimeter brackets (always on perimeter walls)
+      pb.brackets.forEach((br) => {
+        let brX = 0, brY = by - 0.25, brZ = 0, brW = 0, brH = beamDepth + 0.25, brD = 0;
+
+        if (isSpanY) {
+          brW = beamWidth + 1.5;
+          brD = 2.0;
+          brX = br.x - brW / 2;
+          if (br.type === 'start') {
+            brZ = br.y;
+          } else {
+            brZ = br.y - 2.0;
+          }
+        } else {
+          brD = beamWidth + 1.5;
+          brW = 2.0;
+          brZ = br.y - brD / 2;
+          if (br.type === 'start') {
+            brX = br.x;
+          } else {
+            brX = br.x - 2.0;
+          }
+        }
+
+        brackets.push({
+          id: `${pb.id}-${br.id}`,
+          x: brX,
+          y: brY,
+          z: brZ,
+          w: brW,
+          h: brH,
+          d: brD,
+          isWoodToWood: false
+        });
+      });
+    });
+
+    // 2. Add Girders
+    supportSystem.girders.forEach((g) => {
+      const isSpanY = g.isSpanY;
+      let bx = 0, bz = 0, bw = 0, bd = 0;
+      
+      if (isSpanY) {
+        bw = g.length;
+        bd = beamWidth;
+        bx = g.x1;
+        bz = g.y1 - beamWidth / 2;
+      } else {
+        bw = beamWidth;
+        bd = g.length;
+        bx = g.x1 - beamWidth / 2;
+        bz = g.y1;
+      }
+
+      const by = foundationHeight - beamDepth;
+
+      beams.push({
+        id: g.id,
+        x: bx,
+        y: by,
+        z: bz,
+        w: bw,
+        h: beamDepth,
+        d: bd
+      });
+
+      // Posts & Piers along girder
+      g.posts.forEach((post, idx) => {
+        const postTop = foundationHeight - beamDepth;
+        const postBottom = revealIn;
+        const postHeight = Math.max(0, postTop - postBottom);
+
+        if (postHeight > 0.01) {
+          posts.push({
+            id: `${g.id}-post-${idx}`,
+            x: post.x - postDim / 2,
+            y: postBottom,
+            z: post.y - postDim / 2,
+            w: postDim,
+            h: postHeight,
+            d: postDim
+          });
+        }
+
+        piers.push({
+          id: `${g.id}-pier-${idx}`,
+          x: post.x,
+          y: (revealIn - depthIn) / 2,
+          z: post.y,
+          radius: isRound ? pierDiameter / 2 : undefined,
+          w: !isRound ? pierSquareSize : undefined,
+          h: pierHeight,
+          d: !isRound ? pierSquareSize : undefined,
+          type: isRound ? 'round' : 'square'
+        });
+      });
+
+      // Girder endpoints brackets
+      g.brackets.forEach((br) => {
+        let brX = 0, brY = by - 0.25, brZ = 0, brW = 0, brH = beamDepth + 0.25, brD = 0;
+
+        if (isSpanY) {
+          brD = beamWidth + 1.5;
+          brW = 2.0;
+          brZ = br.y - brD / 2;
+          if (br.type === 'start') {
+            brX = br.x;
+          } else {
+            brX = br.x - 2.0;
+          }
+        } else {
+          brW = beamWidth + 1.5;
+          brD = 2.0;
+          brX = br.x - brW / 2;
+          if (br.type === 'start') {
+            brZ = br.y;
+          } else {
+            brZ = br.y - 2.0;
+          }
+        }
+
+        brackets.push({
+          id: `${g.id}-${br.id}`,
+          x: brX,
+          y: brY,
+          z: brZ,
+          w: brW,
+          h: brH,
+          d: brD,
+          isWoodToWood: br.isWoodToWood
+        });
+      });
+    });
+
+    return { beams, posts, piers, brackets };
+  }, [
+    enableGirderSystem, addFloorFraming, girderSpanThresholdFt, girderPostSpacingFt,
+    girderSize, girderPostSize, girderPierSize, foundationHeight, joistSize,
+    shape, widthIn, lengthIn, floorBays, joistDirection, addPocketBeams,
+    lRightDepthIn, lBackWidthIn, uWallsIn, hLeftBarWidthIn, hRightBarWidthIn, hMiddleBarHeightIn, hMiddleBarOffsetIn, tTopWidthIn, tTopLengthIn, tStemWidthIn, tStemLengthIn,
+    combinedBlocks, shapeBlocks, lDirection
+  ]);
 
   const activeFloorCutHeight = useMemo(() => {
     let z = totalBaseHeight;
@@ -2793,7 +3615,8 @@ export default function Preview3D({
 
   return (
     <div className="w-full h-full bg-zinc-100 dark:bg-[#0f1424] rounded-xl overflow-hidden relative border border-zinc-200 dark:border-[#1c2240]">
-      <Canvas shadows dpr={[1, 2]}>
+      <CanvasErrorBoundary>
+      <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, failIfMajorPerformanceCaveat: false }} onCreated={({ gl }) => { gl.setClearColor('#0f1424'); }}>
         <Suspense fallback={null}>
           <PerspectiveCamera makeDefault position={[widthIn * 0.03, wallHeightIn * 0.08, lengthIn * 0.03]} fov={50} />
           <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 2.1} autoRotate={isDroneMode} autoRotateSpeed={1.0} />
@@ -2816,18 +3639,31 @@ export default function Preview3D({
             />
           )}
           {customHdriUrlProp ? (
-            <TextureErrorBoundary fallback={<Environment preset={hdriPresetProp as any} />}>
-              <Suspense fallback={<Environment preset={hdriPresetProp as any} />}>
+            <TextureErrorBoundary
+              resetKey={customHdriUrlProp}
+              fallback={
+                <TextureErrorBoundary fallback={null}>
+                  <Suspense fallback={null}>
+                    <Environment preset={hdriPresetProp as any} />
+                  </Suspense>
+                </TextureErrorBoundary>
+              }
+            >
+              <Suspense fallback={null}>
                 <Environment
                   files={customHdriUrlProp}
                   background
-                  ground={{ height: 15, radius: 120, scale: 100 }}
                 />
               </Suspense>
             </TextureErrorBoundary>
           ) : (
-            <Environment preset={hdriPresetProp as any} />
+            <TextureErrorBoundary fallback={null}>
+              <Suspense fallback={null}>
+                <Environment preset={hdriPresetProp as any} />
+              </Suspense>
+            </TextureErrorBoundary>
           )}
+
           <CameraController captureTrigger={cameraCaptureTrigger} onCapture={(cam) => setCustomCameras?.(prev => [...prev, { ...cam, name: `View ${prev.length + 1}` }])}
             presetTrigger={cameraPresetTrigger} 
             targetCenter={[(widthIn / 2.0) * 0.0254, totalBaseHeight * 0.0254 + (wallHeightIn / 2) * 0.0254, (lengthIn / 2.0) * 0.0254]} 
@@ -2839,7 +3675,7 @@ export default function Preview3D({
             cutHeight={activeFloorCutHeight} 
           />
           {showAxes && <axesHelper args={[500]} rotation={[-Math.PI / 2, 0, 0]} />}
-          {showGround && !customHdriUrlProp && <Ground
+          {showGround && <Ground
           />}
           
 
@@ -2858,6 +3694,74 @@ export default function Preview3D({
                   onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }}
                 />
               ))}
+
+              {/* Floor Girder Support System */}
+              {addFloorFraming && enableGirderSystem && (
+                <group>
+                  {/* Girder Beams */}
+                  {girderSystem3D.beams.map((b) => (
+                    <FoundationPart 
+                      key={b.id} 
+                      x={b.x} 
+                      y={b.y} 
+                      z={b.z} 
+                      w={b.w} 
+                      h={b.h} 
+                      d={b.d} 
+                      color={b.isPocketBeam ? "#a16207" : "#d9a05b"} // Richer/darker brown for pocket beams
+                      surfaceId={`girder-${b.id}`} 
+                      appliedMaterials={activeMaterials} 
+                      materialConfigs={materialConfigs}
+                      activePaintMaterial={localActivePaint}
+                      onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }}
+                    />
+                  ))}
+                  {/* Support Posts */}
+                  {girderSystem3D.posts.map((p) => (
+                    <FoundationPart 
+                      key={p.id} 
+                      x={p.x} 
+                      y={p.y} 
+                      z={p.z} 
+                      w={p.w} 
+                      h={p.h} 
+                      d={p.d} 
+                      color="#b45309"
+                      surfaceId={`post-${p.id}`} 
+                      appliedMaterials={activeMaterials} 
+                      materialConfigs={materialConfigs}
+                      activePaintMaterial={localActivePaint}
+                      onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }}
+                    />
+                  ))}
+                  {/* Concrete Piers */}
+                  {girderSystem3D.piers.map((p) => (
+                    p.type === 'round' ? (
+                      <mesh key={p.id} position={[p.x, p.y, p.z]} castShadow receiveShadow>
+                        <cylinderGeometry args={[p.radius!, p.radius!, p.h, 16]} />
+                        <meshStandardMaterial color="#94a3b8" roughness={0.9} metalness={0.1} />
+                      </mesh>
+                    ) : (
+                      <mesh key={p.id} position={[p.x, p.y, p.z]} castShadow receiveShadow>
+                        <boxGeometry args={[p.w!, p.h, p.d!]} />
+                        <meshStandardMaterial color="#94a3b8" roughness={0.9} metalness={0.1} />
+                      </mesh>
+                    )
+                  ))}
+                  {/* Simpson Girder Brackets */}
+                  {girderSystem3D.brackets.map((b) => (
+                    <mesh key={b.id} position={[b.x + b.w / 2, b.y + b.h / 2, b.z + b.d / 2]} castShadow receiveShadow>
+                      <boxGeometry args={[b.w, b.h, b.d]} />
+                      <meshStandardMaterial 
+                        color={b.isWoodToWood ? "#cbd5e1" : "#64748b"} // Galvanised steel for wood-to-wood, dark steel for wall
+                        roughness={b.isWoodToWood ? 0.3 : 0.2} 
+                        metalness={b.isWoodToWood ? 0.7 : 0.8} 
+                      />
+                    </mesh>
+                  ))}
+                </group>
+              )}
+
               {!addFloorFraming && foundationType !== 'slab' && foundationType !== 'slab-on-grade' && (
                 <group>
                   {shape === 'rectangle' && <FoundationPart x={0} y={foundationHeight} z={0} w={widthIn} h={subfloorThickness} d={lengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />}
@@ -2894,7 +3798,7 @@ export default function Preview3D({
               )}
 
               {/* ── Interior floor finish — sits on top of floor system, independently paintable ── */}
-              {(addFloorFraming || noFramingFloorOnly || !addFloorFraming) && foundationType !== 'slab' && foundationType !== 'slab-on-grade' && (() => {
+              {addSubfloor && foundationType !== 'slab' && foundationType !== 'slab-on-grade' && (() => {
                 const ffy = foundationHeight + floorSystemHeight; // top of the full floor structure
                 const ffh = 0.5; // thin finish layer (0.5")
                 const ffColor = "#c8b89a"; // warm natural tone — overridden by applied texture
@@ -3188,13 +4092,13 @@ export default function Preview3D({
                         <RoofFace pts={[ovNw, ridgeL, ridgeR, ovNe]} {...fp('slope-left')} noOffset={true} />
                         {/* Right slope (NE → Ridge → SE) */}
                         <RoofFace pts={[ovSw, ovSe, ridgeR, ridgeL]} {...fp('slope-right')} noOffset={true} />
-                        {/* Front end (NW → NE → ridge) */}
-                        {Math.abs(ovNw[0] - ovNe[0]) > 1 && (
-                          <RoofFace pts={[ovNw, ovNe, ridgeR, ridgeL]} {...fp('end-front')} noOffset={true} />
+                        {/* Left end (NW → SW → ridgeL) */}
+                        {Math.abs(ovNw[2] - ovSw[2]) > 1 && (
+                          <RoofFace pts={[ovNw, ovSw, ridgeL]} {...fp('end-front')} noOffset={true} />
                         )}
-                        {/* Back end (SW → SE → ridge) */}
-                        {Math.abs(ovSw[0] - ovSe[0]) > 1 && (
-                          <RoofFace pts={[ovSe, ovSw, ridgeL, ridgeR]} {...fp('end-back')} noOffset={true} />
+                        {/* Right end (NE → SE → ridgeR) */}
+                        {Math.abs(ovNe[2] - ovSe[2]) > 1 && (
+                          <RoofFace pts={[ovNe, ovSe, ridgeR]} {...fp('end-back')} noOffset={true} />
                         )}
                         {/* Underside */}
                         <RoofFace pts={[ovNw, ovNe, ovSe, ovSw]} {...fp('underside')} noOffset={true} />
@@ -3428,9 +4332,10 @@ export default function Preview3D({
 
 
           
-          <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={40} blur={2} far={4.5} />
+
         </Suspense>
       </Canvas>
+      </CanvasErrorBoundary>
       
       <div className="absolute top-4 left-4 flex flex-col gap-2">
         <button

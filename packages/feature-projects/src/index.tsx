@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import App from './App';
 import { useProject } from '@dooleys/core';
-import type { TaskData, BudgetItemData, ChangeOrderData, SubcontractorData } from '@dooleys/core';
+import type { TaskData, BudgetItemData, ChangeOrderData, SubcontractorData, ProgressPhotoData, DailyLogData } from '@dooleys/core';
 
 /**
  * Bridge payload — the PM state subset pushed to ProjectContext.
@@ -15,6 +15,7 @@ export interface PMBridgePayload {
     progress: number;
     status: 'completed' | 'on-track' | 'pending' | 'delayed';
     dependencies?: string[];
+    drawPct?: number;
   }[];
   budgetItems: {
     id: string;
@@ -36,6 +37,19 @@ export interface PMBridgePayload {
     coiStatus: 'valid' | 'expired' | 'missing';
     permitStatus: 'valid' | 'expired' | 'missing';
   }[];
+  progressPhotos?: {
+    id: string;
+    url: string;
+    date: string;
+    phase: string;
+    location?: [number, number, number];
+    note?: string;
+  }[];
+  dailyLogs?: {
+    id: string;
+    date: string;
+    content: string;
+  }[];
 }
 
 /**
@@ -46,12 +60,19 @@ export interface PMBridgePayload {
  * budget, and compliance data to the shared ProjectContext.
  */
 export function ProjectModule() {
-  const { setTasks, setBudgetItems, setChangeOrders, setSubcontractors } = useProject();
+  const {
+    setTasks,
+    setBudgetItems,
+    setChangeOrders,
+    setSubcontractors,
+    setProgressPhotos,
+    setDailyLogs
+  } = useProject();
   const lastHashRef = useRef<string>('');
 
-  const handlePMChange = (payload: PMBridgePayload) => {
-    // Avoid unnecessary bridge writes
-    const hash = `${payload.tasks.length}-${payload.budgetItems.length}-${payload.changeOrders.length}-${payload.subcontractors.length}`;
+  const handlePMChange = useCallback((payload: PMBridgePayload) => {
+    // Avoid unnecessary bridge writes by comparing serialized payloads
+    const hash = JSON.stringify(payload);
     if (hash === lastHashRef.current) return;
     lastHashRef.current = hash;
 
@@ -63,6 +84,7 @@ export function ProjectModule() {
       progress: t.progress,
       status: t.status,
       dependencies: t.dependencies,
+      drawPct: t.drawPct,
     } as TaskData)));
 
     setBudgetItems(payload.budgetItems.map(b => ({
@@ -87,7 +109,26 @@ export function ProjectModule() {
       coiStatus: s.coiStatus,
       permitStatus: s.permitStatus,
     } as SubcontractorData)));
-  };
+
+    if (payload.progressPhotos) {
+      setProgressPhotos(payload.progressPhotos.map(p => ({
+        id: p.id,
+        url: p.url,
+        date: p.date,
+        phase: p.phase,
+        location: p.location,
+        note: p.note,
+      } as ProgressPhotoData)));
+    }
+
+    if (payload.dailyLogs) {
+      setDailyLogs(payload.dailyLogs.map(l => ({
+        id: l.id,
+        date: l.date,
+        content: l.content,
+      } as DailyLogData)));
+    }
+  }, [setTasks, setBudgetItems, setChangeOrders, setSubcontractors, setProgressPhotos, setDailyLogs]);
 
   return <App onPMChange={handlePMChange} />;
 }

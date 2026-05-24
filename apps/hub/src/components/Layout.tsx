@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FileText, PenTool, KanbanSquare } from 'lucide-react';
+import { LayoutDashboard, FileText, PenTool, KanbanSquare, Check, Circle } from 'lucide-react';
+import { useProject } from '@dooleys/core';
 
 interface LayoutProps {
   children: {
@@ -13,6 +14,7 @@ interface LayoutProps {
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const location = useLocation();
+  const { isDirty, projectFileName, currentProject } = useProject();
   
   const navItems = [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -49,6 +51,30 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               </Link>
             )
           })}
+        </div>
+
+        {/* Save status indicator */}
+        <div className="mt-auto px-4 pb-5">
+          <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2.5">
+            <div className="flex items-center gap-2 text-xs">
+              {isDirty ? (
+                <>
+                  <Circle size={8} className="text-amber-400 fill-amber-400 animate-pulse flex-shrink-0" />
+                  <span className="text-amber-400/80 font-medium">Unsaved changes</span>
+                </>
+              ) : (
+                <>
+                  <Check size={12} className="text-emerald-400 flex-shrink-0" />
+                  <span className="text-emerald-400/70 font-medium">All changes saved</span>
+                </>
+              )}
+            </div>
+            {(projectFileName || currentProject?.name) && (
+              <div className="mt-1.5 text-[10px] text-white/30 truncate" title={projectFileName || currentProject?.name || ''}>
+                {projectFileName || currentProject?.name}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

@@ -103,7 +103,38 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
     imgRef
   } = props;
 
+  const [imageDimensions, setImageDimensions] = React.useState({ width: 0, height: 0 });
+
+  React.useEffect(() => {
+    const imgEl = imgRef.current;
+    if (!imgEl) return;
+
+    const updateDims = () => {
+      if (imgEl.width && imgEl.height) {
+        setImageDimensions({ width: imgEl.width, height: imgEl.height });
+      }
+    };
+
+    // Update dimensions on load
+    imgEl.addEventListener('load', updateDims);
+
+    // Initial check (if already loaded)
+    updateDims();
+
+    // ResizeObserver to detect layout or viewport changes
+    const observer = new ResizeObserver(() => {
+      updateDims();
+    });
+    observer.observe(imgEl);
+
+    return () => {
+      imgEl.removeEventListener('load', updateDims);
+      observer.disconnect();
+    };
+  }, [imgRef, preview, currentPage, uploadMode]);
+
   return (
+
     <>
         {/* Top: Upload Section */}
         <section className="bg-surface/50 border border-ink/10 rounded-3xl p-8 space-y-6">
@@ -535,6 +566,21 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                 isFullscreen && "fixed inset-0 z-[100] bg-paper p-4 rounded-none border-none"
               )}
               onClick={() => !preview && fileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                  const mockEvent = {
+                    target: {
+                      files: e.dataTransfer.files,
+                      value: ''
+                    }
+                  } as unknown as React.ChangeEvent<HTMLInputElement>;
+                  handleFileChange(mockEvent);
+                }
+              }}
             >
               <input 
                 type="file" 
@@ -718,13 +764,13 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                                 {/* Persistent Guides */}
                                 {guides.filter(g => g.page === currentPage || (!g.page && currentPage === 1)).map(guide => {
                                   if (guide.type === 'area' && guide.points) {
-                                    const pointsStr = guide.points.map(p => `${(p.x / 100) * (imgRef.current?.width || 0)},${(p.y / 100) * (imgRef.current?.height || 0)}`).join(' ');
+                                    const pointsStr = guide.points.map(p => `${(p.x / 100) * (imageDimensions.width)},${(p.y / 100) * (imageDimensions.height)}`).join(' ');
                                     const centerX = guide.points.reduce((sum, p) => sum + p.x, 0) / guide.points.length;
                                     const centerY = guide.points.reduce((sum, p) => sum + p.y, 0) / guide.points.length;
                                     return (
                                       <g key={guide.id}>
                                         <polygon points={pointsStr} fill="#10b981" fillOpacity="0.2" stroke="#10b981" strokeWidth="1.5" strokeDasharray="4 4" />
-                                        <g transform={`translate(${(centerX / 100) * (imgRef.current?.width || 0)}, ${(centerY / 100) * (imgRef.current?.height || 0)})`}>
+                                        <g transform={`translate(${(centerX / 100) * (imageDimensions.width)}, ${(centerY / 100) * (imageDimensions.height)})`}>
                                           <rect x="-35" y="-10" width="70" height="20" rx="10" fill="#10b981" opacity="0.8" />
                                           <text textAnchor="middle" dominantBaseline="middle" fill="white" className="text-[8px] font-bold font-mono">{guide.label}</text>
                                         </g>
@@ -734,8 +780,8 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                                     const p1 = guide.points[0];
                                     const p2 = guide.points[1];
                                     const p3 = guide.points[2];
-                                    const w = imgRef.current?.width || 0;
-                                    const h = imgRef.current?.height || 0;
+                                    const w = imageDimensions.width;
+                                    const h = imageDimensions.height;
                                     return (
                                       <g key={guide.id}>
                                         <polyline points={`${(p1.x/100)*w},${(p1.y/100)*h} ${(p2.x/100)*w},${(p2.y/100)*h} ${(p3.x/100)*w},${(p3.y/100)*h}`} fill="none" stroke="#10b981" strokeWidth="1.5" strokeDasharray="4 4" />
@@ -758,7 +804,7 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                                           strokeDasharray="4 4"
                                           opacity="0.6"
                                         />
-                                        <g transform={`translate(${((guide.start.x + guide.end.x) / 2 / 100) * (imgRef.current?.width || 0)}, ${((guide.start.y + guide.end.y) / 2 / 100) * (imgRef.current?.height || 0)})`}>
+                                        <g transform={`translate(${((guide.start.x + guide.end.x) / 2 / 100) * (imageDimensions.width)}, ${((guide.start.y + guide.end.y) / 2 / 100) * (imageDimensions.height)})`}>
                                           <rect 
                                             x="-25" 
                                             y="-10" 
@@ -788,13 +834,13 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                                   <g>
                                     {measurementType === 'area' && (
                                       <polygon 
-                                        points={`${measurementPoints.map(p => `${(p.x/100)*(imgRef.current?.width||0)},${(p.y/100)*(imgRef.current?.height||0)}`).join(' ')} ${mousePos ? `${(mousePos.x/100)*(imgRef.current?.width||0)},${(mousePos.y/100)*(imgRef.current?.height||0)}` : ''}`} 
+                                        points={`${measurementPoints.map(p => `${(p.x/100)*(imageDimensions.width)},${(p.y/100)*(imageDimensions.height)}`).join(' ')} ${mousePos ? `${(mousePos.x/100)*(imageDimensions.width)},${(mousePos.y/100)*(imageDimensions.height)}` : ''}`} 
                                         fill="#10b981" fillOpacity="0.2" stroke="#10b981" strokeWidth="1.5" strokeDasharray="4 4" 
                                       />
                                     )}
                                     {measurementType === 'angle' && (
                                       <polyline 
-                                        points={`${measurementPoints.map(p => `${(p.x/100)*(imgRef.current?.width||0)},${(p.y/100)*(imgRef.current?.height||0)}`).join(' ')} ${mousePos ? `${(mousePos.x/100)*(imgRef.current?.width||0)},${(mousePos.y/100)*(imgRef.current?.height||0)}` : ''}`} 
+                                        points={`${measurementPoints.map(p => `${(p.x/100)*(imageDimensions.width)},${(p.y/100)*(imageDimensions.height)}`).join(' ')} ${mousePos ? `${(mousePos.x/100)*(imageDimensions.width)},${(mousePos.y/100)*(imageDimensions.height)}` : ''}`} 
                                         fill="none" stroke="#10b981" strokeWidth="1.5" strokeDasharray="4 4" 
                                       />
                                     )}
@@ -817,15 +863,15 @@ export function BlueprintCanvas(props: BlueprintCanvasProps) {
                                       strokeDasharray="5 5"
                                     />
                                     {/* Ticks */}
-                                    <g transform={`translate(${(measurementStart.x / 100) * (imgRef.current?.width || 0)}, ${(measurementStart.y / 100) * (imgRef.current?.height || 0)}) rotate(${Math.atan2(measurementEnd.y - measurementStart.y, measurementEnd.x - measurementStart.x) * 180 / Math.PI})`}>
+                                    <g transform={`translate(${(measurementStart.x / 100) * (imageDimensions.width)}, ${(measurementStart.y / 100) * (imageDimensions.height)}) rotate(${Math.atan2(measurementEnd.y - measurementStart.y, measurementEnd.x - measurementStart.x) * 180 / Math.PI})`}>
                                       <line x1="0" y1="-10" x2="0" y2="10" stroke="#10b981" strokeWidth="2" />
                                     </g>
-                                    <g transform={`translate(${(measurementEnd.x / 100) * (imgRef.current?.width || 0)}, ${(measurementEnd.y / 100) * (imgRef.current?.height || 0)}) rotate(${Math.atan2(measurementEnd.y - measurementStart.y, measurementEnd.x - measurementStart.x) * 180 / Math.PI})`}>
+                                    <g transform={`translate(${(measurementEnd.x / 100) * (imageDimensions.width)}, ${(measurementEnd.y / 100) * (imageDimensions.height)}) rotate(${Math.atan2(measurementEnd.y - measurementStart.y, measurementEnd.x - measurementStart.x) * 180 / Math.PI})`}>
                                       <line x1="0" y1="-10" x2="0" y2="10" stroke="#10b981" strokeWidth="2" />
                                     </g>
                                     {/* Measurement Label */}
                                     {currentMeasurement && (
-                                      <g transform={`translate(${((measurementStart.x + measurementEnd.x) / 2 / 100) * (imgRef.current?.width || 0)}, ${((measurementStart.y + measurementEnd.y) / 2 / 100) * (imgRef.current?.height || 0)})`}>
+                                      <g transform={`translate(${((measurementStart.x + measurementEnd.x) / 2 / 100) * (imageDimensions.width)}, ${((measurementStart.y + measurementEnd.y) / 2 / 100) * (imageDimensions.height)})`}>
                                         <rect 
                                           x="-30" 
                                           y="-12" 

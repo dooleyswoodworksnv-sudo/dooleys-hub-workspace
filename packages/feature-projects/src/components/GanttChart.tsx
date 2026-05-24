@@ -9,6 +9,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   arrayMove,
@@ -252,7 +253,7 @@ export const GanttChart = ({ tasks, setTasks }: GanttChartProps) => {
     })
   );
 
-  const handleDragEnd = (event: any) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
 
@@ -292,12 +293,12 @@ export const GanttChart = ({ tasks, setTasks }: GanttChartProps) => {
 
   const minDate = useMemo(() => {
     if (tasks.length === 0) return new Date();
-    return new Date(Math.min(...tasks.map(t => t.start.getTime())));
+    return new Date(Math.min(...tasks.map(t => new Date(t.start).getTime())));
   }, [tasks]);
   
   const maxDate = useMemo(() => {
     if (tasks.length === 0) return addDays(new Date(), 30);
-    return new Date(Math.max(...tasks.map(t => t.end.getTime())));
+    return new Date(Math.max(...tasks.map(t => new Date(t.end).getTime())));
   }, [tasks]);
   
   // Extend timeline a bit

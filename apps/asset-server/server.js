@@ -382,6 +382,108 @@ app.post('/api/material-configs', (req, res) => {
   }
 });
 
+// ── HDRI Skydome files ──────────────────────────────────────────────
+const HDRI_DIR = path.join(ASSETS_ROOT, 'hdri');
+fs.mkdirSync(HDRI_DIR, { recursive: true });
+
+const hdriStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    fs.mkdirSync(HDRI_DIR, { recursive: true });
+    cb(null, HDRI_DIR);
+  },
+  filename: (req, file, cb) => {
+    const safeName = file.originalname.replace(/[^a-zA-Z0-9._\-\s()]/g, '_');
+    cb(null, safeName);
+  }
+});
+const hdriUpload = multer({ storage: hdriStorage, limits: { fileSize: 500 * 1024 * 1024 } });
+
+/**
+ * GET /api/hdri — List all uploaded HDRI files
+ */
+app.get('/api/hdri', (req, res) => {
+  try {
+    if (!fs.existsSync(HDRI_DIR)) {
+      return res.json({ hdriFiles: [] });
+    }
+
+    const entries = fs.readdirSync(HDRI_DIR, { withFileTypes: true });
+    const hdriFiles = entries
+      .filter(e => e.isFile() && /\.(hdr|exr|hdri)$/i.test(e.name))
+      .map(e => {
+        const fullPath = path.join(HDRI_DIR, e.name);
+        const stat = fs.statSync(fullPath);
+        return {
+          name: e.name,
+          url: `/api/hdri/serve?file=${encodeURIComponent(e.name)}`,
+          size: stat.size,
+        };
+      });
+
+    res.json({ hdriFiles });
+  } catch (err) {
+    console.error('Error listing HDRI files:', err);
+    res.status(500).json({ error: 'Failed to list HDRI files' });
+  }
+});
+
+/**
+ * POST /api/hdri/upload — Upload a new HDRI file
+ * Body (multipart): hdriFile
+ */
+app.post('/api/hdri/upload', hdriUpload.single('hdriFile'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    const url = `/api/hdri/serve?file=${encodeURIComponent(req.file.filename)}`;
+    console.log(`🌐 HDRI uploaded: ${req.file.filename}`);
+    res.json({ success: true, url, name: req.file.filename });
+  } catch (err) {
+    console.error('HDRI upload error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/hdri/serve — Serve an HDRI file by filename
+ * Query: file (filename within the hdri directory)
+ */
+app.get('/api/hdri/serve', (req, res) => {
+  try {
+    const fileName = req.query.file;
+    if (!fileName) {
+      return res.status(400).json({ error: 'Missing file parameter' });
+    }
+
+    // Security: prevent path traversal
+    const safeName = path.basename(fileName);
+    const filePath = path.join(HDRI_DIR, safeName);
+
+    if (!isPathSafe(filePath)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'HDRI file not found' });
+    }
+
+    // Set appropriate content type for HDR files
+    const ext = path.extname(safeName).toLowerCase();
+    if (ext === '.hdr') {
+      res.setHeader('Content-Type', 'application/octet-stream');
+    } else if (ext === '.exr') {
+      res.setHeader('Content-Type', 'application/octet-stream');
+    }
+
+    res.sendFile(path.resolve(filePath));
+  } catch (err) {
+    console.error('HDRI serve error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', assetsRoot: ASSETS_ROOT });

@@ -96,7 +96,7 @@ export function BudgetModule({
         pct: pct,
         drawAmount: pct * projectedFinalCost
       };
-    }).filter(t => t.pct > 0 || (t.drawPct !== undefined));
+    });
   }, [tasks, projectedFinalCost]);
 
   const handleUpdateTask = (id: string, field: keyof Task, value: any) => {
@@ -357,6 +357,7 @@ export function BudgetModule({
                    <label className="block text-[10px] text-text-muted uppercase tracking-widest mb-1">Budgeted ($)</label>
                    <input
                      type="number"
+                     min="0"
                      value={newAllowance.budgeted || ''}
                      onChange={(e) => setNewAllowance(prev => ({ ...prev, budgeted: parseFloat(e.target.value) }))}
                      className="w-full bg-black border border-white/10 text-white text-sm p-2 focus:border-accent-gold outline-none font-mono"
@@ -401,6 +402,7 @@ export function BudgetModule({
                           <td className="p-3 text-right">
                              <input 
                                type="number"
+                               min="0"
                                value={item.budgeted || ''}
                                onChange={(e) => handleUpdateAllowance(item.id, 'budgeted', parseFloat(e.target.value) || 0)}
                                className="bg-transparent border border-transparent hover:border-white/10 focus:border-accent-gold text-white/70 text-sm p-1.5 outline-none transition-colors w-24 text-right font-mono"
@@ -410,6 +412,7 @@ export function BudgetModule({
                           <td className="p-3 text-right">
                              <input 
                                type="number"
+                               min="0"
                                value={item.actual || ''}
                                onChange={(e) => handleUpdateAllowance(item.id, 'actual', parseFloat(e.target.value) || 0)}
                                className="bg-black border border-white/10 text-white text-sm p-1.5 focus:border-accent-gold outline-none transition-colors w-28 text-right font-mono"
@@ -471,6 +474,7 @@ export function BudgetModule({
                    <label className="block text-[10px] text-text-muted uppercase tracking-widest mb-1">Cost Add</label>
                    <input
                      type="number"
+                     min="0"
                      value={newCO.amount || ''}
                      onChange={(e) => setNewCO(prev => ({ ...prev, amount: parseFloat(e.target.value) }))}
                      className="w-full bg-black border border-white/10 text-white text-sm p-2 focus:border-accent-gold outline-none font-mono"

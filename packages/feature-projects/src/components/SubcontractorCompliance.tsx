@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { ShieldCheck, ShieldAlert, Upload, Clock, CheckCircle, Trash2, Plus, X, ChevronDown, ChevronUp, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
 import { type Task } from './GanttChart';
@@ -24,9 +24,10 @@ interface SubcontractorComplianceProps {
   setSubcontractors: React.Dispatch<React.SetStateAction<Subcontractor[]>>;
   tasks: Task[];
   modelLoadedAt: string | null;
+  onToast?: (message: string, type: 'success' | 'error' | 'info') => void;
 }
 
-export function SubcontractorCompliance({ subcontractors, setSubcontractors, tasks, modelLoadedAt }: SubcontractorComplianceProps) {
+export function SubcontractorCompliance({ subcontractors, setSubcontractors, tasks, modelLoadedAt, onToast }: SubcontractorComplianceProps) {
   const [isAddingSub, setIsAddingSub] = useState(false);
   const [newSub, setNewSub] = useState<Partial<Subcontractor>>({
     name: '',
@@ -63,7 +64,7 @@ export function SubcontractorCompliance({ subcontractors, setSubcontractors, tas
       }
       return s;
     }));
-    alert(`Uploaded compliance document for ${file.name}`);
+    if (onToast) onToast(`Uploaded compliance document for ${file.name}`, 'success');
     e.target.value = '';
   };
 
@@ -290,6 +291,40 @@ export function SubcontractorCompliance({ subcontractors, setSubcontractors, tas
                             />
                           </div>
                         </div>
+                        {/* Task Assignment (BUG-008) */}
+                        {tasks.length > 0 && (
+                          <div className="mt-4 max-w-4xl mx-auto">
+                            <label className="block text-[10px] text-text-muted uppercase tracking-widest mb-2">Assigned Tasks</label>
+                            <div className="flex flex-wrap gap-2">
+                              {tasks.map(task => {
+                                const isAssigned = sub.taskIdMatches.includes(task.id);
+                                return (
+                                  <button
+                                    key={task.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setSubcontractors(prev => prev.map(s => {
+                                        if (s.id !== sub.id) return s;
+                                        const newMatches = isAssigned
+                                          ? s.taskIdMatches.filter(id => id !== task.id)
+                                          : [...s.taskIdMatches, task.id];
+                                        return { ...s, taskIdMatches: newMatches };
+                                      }));
+                                    }}
+                                    className={cn(
+                                      "text-[11px] px-3 py-1.5 border rounded-sm transition-all font-medium",
+                                      isAssigned
+                                        ? "bg-accent-gold/20 border-accent-gold/50 text-accent-gold"
+                                        : "bg-black/50 border-white/10 text-text-muted hover:border-accent-gold/30 hover:text-white"
+                                    )}
+                                  >
+                                    {task.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   )}

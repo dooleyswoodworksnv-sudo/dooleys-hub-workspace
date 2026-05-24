@@ -14,6 +14,7 @@ export interface DesignerBridgePayload {
   stories: number;
   roofType: string;
   roofPitch: number;
+  floorArea: number;
   materialEstimate: {
     totalCost: number;
     lineItems: {
@@ -25,6 +26,7 @@ export interface DesignerBridgePayload {
       totalCost: number;
     }[];
   };
+  designerState: any;
 }
 
 /**
@@ -35,7 +37,7 @@ export interface DesignerBridgePayload {
  * configuration + material estimates to the shared ProjectContext.
  */
 export function DesignerModule() {
-  const { setDesignConfig, currentProject, setCurrentProject, blueprintData } = useProject();
+  const { setDesignConfig, designConfig, currentProject, setCurrentProject, blueprintData, saveToFile, loadFromFile } = useProject();
   const lastPayloadRef = useRef<string>('');
 
   const handleDesignChange = useCallback((payload: DesignerBridgePayload) => {
@@ -47,8 +49,10 @@ export function DesignerModule() {
       s: payload.stories,
       rt: payload.roofType,
       rp: payload.roofPitch,
+      fa: payload.floorArea,
       tc: payload.materialEstimate.totalCost,
       ic: payload.materialEstimate.lineItems.length,
+      ds: payload.designerState,
     });
 
     if (serialized === lastPayloadRef.current) return;
@@ -63,13 +67,14 @@ export function DesignerModule() {
         overhang: 0,
         fascia: 0,
       }],
-      floorArea: payload.widthFt * payload.lengthFt,
+      floorArea: payload.floorArea,
       stories: payload.stories,
       materialEstimate: {
         totalCost: payload.materialEstimate.totalCost,
         lineItems: payload.materialEstimate.lineItems as MaterialLineItem[],
         lastUpdated: new Date().toISOString(),
       },
+      designerState: payload.designerState,
     };
 
     setDesignConfig(config);
@@ -81,6 +86,9 @@ export function DesignerModule() {
       currentProject={currentProject}
       setCurrentProject={setCurrentProject}
       blueprintImageUrls={blueprintData?.imageDataUrls ?? null}
+      initialState={designConfig?.designerState ?? null}
+      hubSaveToFile={saveToFile}
+      hubLoadFromFile={loadFromFile}
     />
   );
 }

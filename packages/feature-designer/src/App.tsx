@@ -9,6 +9,7 @@ import { Box } from 'lucide-react';
 import { convertPDFToImages } from './services/pdfService';
 import { generateSketchUpCode, GenerationSection } from './utils/sketchupGenerator';
 import { analyzeBlueprint } from './services/aiService';
+import { detectBays, formatBayDimensions } from './utils/bayDetection';
 import { Loader2, Sparkles, Link2, Unlink } from 'lucide-react';
 import { sanitize } from './utils/math';
 import { computeEstimate } from './utils/computeEstimate';
@@ -94,6 +95,15 @@ export interface ExteriorWallConfig {
   floorIndex?: number;
 }
 
+export interface CustomCostItem {
+  id: string;
+  name: string;
+  category: string;
+  quantity: number;
+  unit: string;
+  unitCost: number;
+}
+
 export type RoofFinish = 'none' | 'asphalt-3tab' | 'architectural-shingles' | 'metal-standing-seam' | 'clay-tile' | 'slate' | 'wood-shakes' | 'tpo-membrane' | 'roof-paint';
 export type InteriorFinish = 'none' | 'paint-standard' | 'paint-premium' | 'wallpaper' | 'tile' | 'wood-paneling' | 'wainscoting';
 export type FoundationFinish = 'none' | 'paint' | 'waterproof-coating' | 'stucco-parging' | 'stone-veneer';
@@ -106,6 +116,10 @@ export interface MaterialCosts {
   insulation: number;
   concrete: number;
   joist: number;
+  joistPerLF2x6: number;
+  joistPerLF2x8: number;
+  joistPerLF2x10: number;
+  joistPerLF2x12: number;
   subfloor: number;
   door: number;
   window: number;
@@ -157,6 +171,10 @@ export const DEFAULT_MATERIAL_COSTS: MaterialCosts = {
   insulation: 30.00,
   concrete: 150.00,
   joist: 12.00,
+  joistPerLF2x6: 0.65,
+  joistPerLF2x8: 1.00,
+  joistPerLF2x10: 1.40,
+  joistPerLF2x12: 1.85,
   subfloor: 35.00,
   door: 200.00,
   window: 300.00,
@@ -391,6 +409,7 @@ export interface AppState {
   joistSpacing: number;
   joistSize: '2x6' | '2x8' | '2x10' | '2x12';
   joistDirection: 'x' | 'y';
+  floorBays: import('./utils/bayDetection').FloorBay[];
   addSubfloor: boolean;
   subfloorThickness: number;
   subfloorMaterial: 'plywood' | 'osb';
@@ -398,6 +417,14 @@ export interface AppState {
   generateDimensions: boolean;
   solidWallsOnly: boolean;
   noFramingFloorOnly: boolean;
+  enableGirderSystem: boolean;
+  girderSpanThresholdFt: number;
+  girderPostSpacingFt: number;
+  girderSize: '2-2x10' | '3-2x10' | '4-2x10' | '6x6' | '6x8';
+  girderPostSize: '4x4' | '6x6';
+  girderPierSize: '12" Round' | '16" Square';
+  addPocketBeams: boolean;
+  pocketBeamsOnlyAtGirderEnds: boolean;
   // 3D Environment
   showGround: boolean;
   showSky: boolean;
@@ -429,6 +456,7 @@ export interface AppState {
   roofGroups: RoofGroup[];
   // Per-surface painted materials — tracks texture URL, area in sq ft, and detected finish type
   paintedSurfaces: Record<string, { url: string; areaSqFt: number; finishType: string }>;
+  customCostItems: CustomCostItem[];
 }
 
 const DEFAULT_APP_STATE: AppState = {
@@ -515,6 +543,7 @@ const DEFAULT_APP_STATE: AppState = {
   joistSpacing: 16,
   joistSize: '2x10',
   joistDirection: 'x',
+  floorBays: [],
   addSubfloor: false,
   subfloorThickness: 0.75,
   subfloorMaterial: 'plywood',
@@ -522,6 +551,14 @@ const DEFAULT_APP_STATE: AppState = {
   generateDimensions: true,
   solidWallsOnly: false,
   noFramingFloorOnly: true,
+  enableGirderSystem: false,
+  girderSpanThresholdFt: 12,
+  girderPostSpacingFt: 8,
+  girderSize: '3-2x10',
+  girderPostSize: '6x6',
+  girderPierSize: '12" Round',
+  addPocketBeams: true,
+  pocketBeamsOnlyAtGirderEnds: false,
   showGround: true,
   showSky: true,
   showSun: true,
@@ -545,6 +582,10 @@ const DEFAULT_APP_STATE: AppState = {
     insulation: 30.00,
     concrete: 150.00,
     joist: 12.00,
+    joistPerLF2x6: 0.65,
+    joistPerLF2x8: 1.00,
+    joistPerLF2x10: 1.40,
+    joistPerLF2x12: 1.85,
     subfloor: 35.00,
     door: 200.00,
     window: 300.00,
@@ -594,7 +635,8 @@ const DEFAULT_APP_STATE: AppState = {
   roofWidthIn: 240,
   roofHeightIn: 120,
   selectedRoofPartId: null,
-  roofGroups: []
+  roofGroups: [],
+  customCostItems: []
 };
 
 interface ProjectIdentity {
@@ -612,9 +654,20 @@ interface AppProps {
   setCurrentProject?: (project: ProjectIdentity | null) => void;
   /** All blueprint page images from the Blueprint Reader, auto-loaded into reference panel */
   blueprintImageUrls?: string[] | null;
+  initialState?: any;
+  /** Unified save — provided by Hub wrapper to save the entire project bundle */
+  hubSaveToFile?: () => Promise<void>;
+  /** Unified load — provided by Hub wrapper to load an entire project bundle */
+  hubLoadFromFile?: (file?: File) => Promise<void>;
 }
 
-export default function App({ onDesignChange, currentProject, setCurrentProject, blueprintImageUrls }: AppProps = {}) {
+const splitInches = (val: number) => {
+  const ft = Math.trunc(val / 12);
+  const inches = Math.round(val % 12);
+  return { ft, inches };
+};
+
+export default function App({ onDesignChange, currentProject, setCurrentProject, blueprintImageUrls, initialState, hubSaveToFile, hubLoadFromFile }: AppProps = {}) {
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('dbs-dark-mode');
@@ -726,6 +779,7 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
 
   // Materials
   const [materialCosts, setMaterialCosts] = useState<MaterialCosts>(DEFAULT_MATERIAL_COSTS);
+  const [customCostItems, setCustomCostItems] = useState<CustomCostItem[]>([]);
 
   // Foundation
   const [foundationType, setFoundationType] = useState<'none' | 'slab' | 'slab-on-grade' | 'stem-wall'>('stem-wall');
@@ -740,7 +794,14 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
   useEffect(() => {
     if (isRestoring.current) return;
     setFoundationShape(shape);
+    setFloorBays([]); // Clear per-bay data when shape changes
   }, [shape]);
+
+  // Clear per-bay data when building dimensions change (bay coordinates become stale)
+  useEffect(() => {
+    if (isRestoring.current) return;
+    setFloorBays([]);
+  }, [widthFt, widthInches, lengthFt, lengthInches, lRightDepthFt, lRightDepthInches, lBackWidthFt, lBackWidthInches]);
 
   // Bumpouts
   const [bumpouts, setBumpouts] = useState<BumpoutConfig[]>([]);
@@ -920,9 +981,8 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
       const dy = pdfCalibration.p2.y - pdfCalibration.p1.y;
       const pixelDist = Math.sqrt(dx * dx + dy * dy);
       
-      const ft = Math.floor(pixelDist / 12);
-      const inc = Math.round(pixelDist % 12);
-      setCalibrationLength(`${ft}' ${inc}"`);
+      const { ft, inches } = splitInches(pixelDist);
+      setCalibrationLength(`${ft}' ${inches}"`);
     }
   }, [pdfCalibration.p1, pdfCalibration.p2, appliedCalibration]);
 
@@ -999,7 +1059,18 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     }
   };
 
-  const handleSaveToDevice = () => {
+  const handleSaveToDevice = async () => {
+    // When running inside the Hub, use the unified project save
+    if (hubSaveToFile) {
+      try {
+        await hubSaveToFile();
+      } catch (err) {
+        console.error('Failed to save project:', err);
+      }
+      return;
+    }
+
+    // Standalone: save only designer state
     const projectData = {
       version: '1.0',
       state: {
@@ -1018,6 +1089,7 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
         pdfImages, selectedPdfIndex, pdfScale, pdfOffset, pdfRotation, pdfOpacity, isBlueprintLocked, pdfCalibration, appliedCalibration,
         guides, chainToLastWall, lastWallType,
         addFloorFraming, joistSpacing, joistSize, joistDirection, addSubfloor, subfloorThickness, subfloorMaterial, rimJoistThickness,
+        enableGirderSystem, girderSpanThresholdFt, girderPostSpacingFt, girderSize, girderPostSize, girderPierSize, addPocketBeams, pocketBeamsOnlyAtGirderEnds,
         generationSection
       }
     };
@@ -1037,7 +1109,21 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     }
   };
 
-  const handleLoadFromDevice = () => {
+  const handleLoadFromDevice = async () => {
+    // When running inside the Hub, use the unified project load
+    if (hubLoadFromFile) {
+      try {
+        await hubLoadFromFile();
+      } catch (err: any) {
+        if (err?.message) {
+          console.error('Failed to load project:', err);
+          alert(`Failed to load project: ${err.message}`);
+        }
+      }
+      return;
+    }
+
+    // Standalone: load only designer state
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
@@ -1138,12 +1224,12 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
       const wallConfig = {
         id: newId,
         orientation,
-        xFt: Math.floor(startXRounded / 12),
-        xInches: startXRounded % 12,
-        yFt: Math.floor(startYRounded / 12),
-        yInches: startYRounded % 12,
-        lengthFt: signedRealIn >= 0 ? Math.floor(signedRealIn / 12) : Math.ceil(signedRealIn / 12),
-        lengthInches: Math.round(signedRealIn % 12),
+        xFt: splitInches(startXRounded).ft,
+        xInches: splitInches(startXRounded).inches,
+        yFt: splitInches(startYRounded).ft,
+        yInches: splitInches(startYRounded).inches,
+        lengthFt: splitInches(signedRealIn).ft,
+        lengthInches: splitInches(signedRealIn).inches,
         thicknessIn: type === 'exterior' ? wallThicknessIn : 4.5,
         floorIndex: currentFloorIndex
       };
@@ -1201,10 +1287,21 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
   const [joistSpacing, setJoistSpacing] = useState<number>(16);
   const [joistSize, setJoistSize] = useState<'2x6' | '2x8' | '2x10' | '2x12'>('2x10');
   const [joistDirection, setJoistDirection] = useState<'x' | 'y'>('y');
+  const [floorBays, setFloorBays] = useState<import('./utils/bayDetection').FloorBay[]>([]);
   const [addSubfloor, setAddSubfloor] = useState<boolean>(true);
   const [subfloorThickness, setSubfloorThickness] = useState<number>(0.75);
   const [subfloorMaterial, setSubfloorMaterial] = useState<'plywood' | 'osb'>('osb');
   const [rimJoistThickness, setRimJoistThickness] = useState<number>(1.5);
+
+  // Floor Girder Support System Options
+  const [enableGirderSystem, setEnableGirderSystem] = useState<boolean>(false);
+  const [girderSpanThresholdFt, setGirderSpanThresholdFt] = useState<number>(12);
+  const [girderPostSpacingFt, setGirderPostSpacingFt] = useState<number>(8);
+  const [girderSize, setGirderSize] = useState<'2-2x10' | '3-2x10' | '4-2x10' | '6x6' | '6x8'>('3-2x10');
+  const [girderPostSize, setGirderPostSize] = useState<'4x4' | '6x6'>('6x6');
+  const [girderPierSize, setGirderPierSize] = useState<'12" Round' | '16" Square'>('12" Round');
+  const [addPocketBeams, setAddPocketBeams] = useState<boolean>(true);
+  const [pocketBeamsOnlyAtGirderEnds, setPocketBeamsOnlyAtGirderEnds] = useState<boolean>(false);
 
   const handleAutoGenerateWalls = async () => {
     if (pdfImages.length === 0) return;
@@ -1427,9 +1524,10 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     exteriorWalls.forEach(w => {
       // Avoid duplicating IDs already listed
       if (!options.some(o => o.id === w.id)) {
-        const len = w.lengthFt * 12 + w.lengthInches;
-        const orient = w.orientation === 'horizontal' ? 'H' : 'V';
-        options.push({ id: w.id, label: `Ext ${w.id} (${orient} ${Math.floor(len/12)}'${len%12}")` });
+        const wLen = w.lengthFt * 12 + w.lengthInches;
+        const wOrient = w.orientation === 'horizontal' ? 'H' : 'V';
+        const { ft, inches } = splitInches(wLen);
+        options.push({ id: w.id, label: `Ext ${w.id} (${wOrient} ${ft}'${inches}")` });
       }
     });
     
@@ -1437,7 +1535,8 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     interiorWalls.forEach(w => {
       const len = w.lengthFt * 12 + w.lengthInches;
       const orient = w.orientation === 'horizontal' ? 'H' : 'V';
-      options.push({ id: w.id, label: `Int ${w.id} (${orient} ${Math.floor(len/12)}'${len%12}")` });
+      const { ft, inches } = splitInches(len);
+      options.push({ id: w.id, label: `Int ${w.id} (${orient} ${ft}'${inches}")` });
     });
     
     return options;
@@ -1515,9 +1614,10 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     showGround, showSky, showSun, sunHour, sunMonth, siteLatitude, hdriPreset, customHdriUrl,
     pdfImages, selectedPdfIndex, pdfScale, pdfOffset, pdfRotation, pdfOpacity, isBlueprintLocked, pdfCalibration,
     foundationType, slabThicknessIn, thickenedEdgeDepthIn, stemWallHeightIn, stemWallThicknessIn, footingWidthIn, footingThicknessIn, foundationShape,
-    addFloorFraming, joistSpacing, joistSize, joistDirection, addSubfloor, subfloorThickness, subfloorMaterial, rimJoistThickness, generateDimensions, solidWallsOnly, noFramingFloorOnly,
+    addFloorFraming, joistSpacing, joistSize, joistDirection, floorBays, addSubfloor, subfloorThickness, subfloorMaterial, rimJoistThickness, generateDimensions, solidWallsOnly, noFramingFloorOnly,
+    enableGirderSystem, girderSpanThresholdFt, girderPostSpacingFt, girderSize, girderPostSize, girderPierSize, addPocketBeams, pocketBeamsOnlyAtGirderEnds,
     additionalStories, currentFloorIndex, upperFloorWallHeightFt, upperFloorWallHeightIn, upperFloorJoistSize,
-    combinedBlocks, shapeBlocks, materialCosts,
+    combinedBlocks, shapeBlocks, materialCosts, customCostItems,
     roofType, roofPitch, roofOverhangIn, trussSpacing, trussType, customTrussScript, roofSheathingThickness,
     roofWidthIn, roofHeightIn, selectedRoofPartId,
     roofParts, trussRuns, dormers, customCameras, roofGroups, paintedSurfaces
@@ -1537,39 +1637,88 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     showGround, showSky, showSun, sunHour, sunMonth, siteLatitude, hdriPreset, customHdriUrl,
     pdfImages, selectedPdfIndex, pdfScale, pdfOffset, pdfRotation, pdfOpacity, isBlueprintLocked, pdfCalibration,
     foundationType, slabThicknessIn, thickenedEdgeDepthIn, stemWallHeightIn, stemWallThicknessIn, footingWidthIn, footingThicknessIn, foundationShape,
-    addFloorFraming, joistSpacing, joistSize, joistDirection, addSubfloor, subfloorThickness, subfloorMaterial, rimJoistThickness, generateDimensions, solidWallsOnly, noFramingFloorOnly,
+    addFloorFraming, joistSpacing, joistSize, joistDirection, floorBays, addSubfloor, subfloorThickness, subfloorMaterial, rimJoistThickness, generateDimensions, solidWallsOnly, noFramingFloorOnly,
+    enableGirderSystem, girderSpanThresholdFt, girderPostSpacingFt, girderSize, girderPostSize, girderPierSize, addPocketBeams, pocketBeamsOnlyAtGirderEnds,
     additionalStories, currentFloorIndex, upperFloorWallHeightFt, upperFloorWallHeightIn, upperFloorJoistSize,
-    combinedBlocks, shapeBlocks, materialCosts,
+    combinedBlocks, shapeBlocks, materialCosts, customCostItems,
     roofType, roofPitch, roofOverhangIn, trussSpacing, trussType, customTrussScript, roofSheathingThickness,
     roofWidthIn, roofHeightIn, selectedRoofPartId,
     roofParts, trussRuns, dormers, customCameras, roofGroups, paintedSurfaces
   ]);
 
-  // ── Bridge: sync design data to shared ProjectContext ──
-  useEffect(() => {
-    if (!onDesignChange) return;
-
-    // Use the shared computeEstimate to match the MaterialsEstimate UI exactly
-    const estimate = computeEstimate(currentState, getWallLength, getAvailableWallOptions);
-
-    onDesignChange({
-      widthFt: currentState.widthFt,
-      lengthFt: currentState.lengthFt,
-      wallHeightFt: currentState.wallHeightFt,
-      stories: 1 + currentState.additionalStories,
-      roofType: currentState.roofType,
-      roofPitch: currentState.roofPitch,
-      materialEstimate: {
-        totalCost: estimate.totalCost,
-        lineItems: estimate.lineItems,
-      },
-    });
-  }, [currentState, onDesignChange, getWallLength, getAvailableWallOptions]);
-
+  // ── State management refs (must be declared before bridge effect) ──
   const [past, setPast] = useState<AppState[]>([]);
   const [future, setFuture] = useState<AppState[]>([]);
   const isRestoring = useRef(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ── Bridge: sync design data to shared ProjectContext (debounced, one-way out) ──
+  const bridgeTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isBridgingRef = useRef(false);
+  const lastBridgedStateRef = useRef<any>(null);
+  useEffect(() => {
+    if (!onDesignChange) return;
+
+    if (bridgeTimerRef.current) clearTimeout(bridgeTimerRef.current);
+
+    bridgeTimerRef.current = setTimeout(() => {
+      // Check isRestoring at execution time, not at setup time
+      if (isRestoring.current) return;
+
+      const estimate = computeEstimate(currentState, getWallLength, getAvailableWallOptions);
+
+      // Compute floor area — for custom shapes, derive from exterior wall bounding box
+      let floorArea = currentState.widthFt * currentState.lengthFt;
+      if (currentState.shape === 'custom' && currentState.exteriorWalls.length > 0) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        currentState.exteriorWalls.forEach(wall => {
+          const wx = wall.xFt * 12 + wall.xInches;
+          const wy = wall.yFt * 12 + wall.yInches;
+          const wlen = wall.lengthFt * 12 + wall.lengthInches;
+          if (wall.orientation === 'horizontal') {
+            minX = Math.min(minX, wx, wx + wlen);
+            maxX = Math.max(maxX, wx, wx + wlen);
+            minY = Math.min(minY, wy);
+            maxY = Math.max(maxY, wy);
+          } else {
+            minX = Math.min(minX, wx);
+            maxX = Math.max(maxX, wx);
+            minY = Math.min(minY, wy, wy + wlen);
+            maxY = Math.max(maxY, wy, wy + wlen);
+          }
+        });
+        const effW = Math.max(1, maxX - minX);
+        const effL = Math.max(1, maxY - minY);
+        floorArea = Math.round((effW / 12) * (effL / 12));
+      }
+
+      // Track the state reference we're sending out so the hydration
+      // effect can recognise its own echo and skip re-hydration.
+      lastBridgedStateRef.current = currentState;
+
+      isBridgingRef.current = true;
+      onDesignChange({
+        widthFt: currentState.widthFt,
+        lengthFt: currentState.lengthFt,
+        wallHeightFt: currentState.wallHeightFt,
+        stories: 1 + currentState.additionalStories,
+        roofType: currentState.roofType,
+        roofPitch: currentState.roofPitch,
+        floorArea,
+        materialEstimate: {
+          totalCost: estimate.totalCost,
+          lineItems: estimate.lineItems,
+        },
+        designerState: currentState,
+      });
+      // Allow next frame to settle before accepting inbound hydration
+      requestAnimationFrame(() => { isBridgingRef.current = false; });
+    }, 300);
+
+    return () => {
+      if (bridgeTimerRef.current) clearTimeout(bridgeTimerRef.current);
+    };
+  }, [currentState, onDesignChange, getWallLength, getAvailableWallOptions]);
 
   const restoreState = useCallback((state: AppState) => {
     setShape(state.shape);
@@ -1581,6 +1730,27 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     setLRightDepthInches(state.lRightDepthInches);
     setLBackWidthFt(state.lBackWidthFt);
     setLBackWidthInches(state.lBackWidthInches);
+
+    // H-Shape
+    setHLeftBarWidthFt(state.hLeftBarWidthFt ?? 10);
+    setHLeftBarWidthInches(state.hLeftBarWidthInches ?? 0);
+    setHRightBarWidthFt(state.hRightBarWidthFt ?? 10);
+    setHRightBarWidthInches(state.hRightBarWidthInches ?? 0);
+    setHMiddleBarHeightFt(state.hMiddleBarHeightFt ?? 10);
+    setHMiddleBarHeightInches(state.hMiddleBarHeightInches ?? 0);
+    setHMiddleBarOffsetFt(state.hMiddleBarOffsetFt ?? 15);
+    setHMiddleBarOffsetInches(state.hMiddleBarOffsetInches ?? 0);
+
+    // T-Shape
+    setTTopWidthFt(state.tTopWidthFt ?? 30);
+    setTTopWidthInches(state.tTopWidthInches ?? 0);
+    setTTopLengthFt(state.tTopLengthFt ?? 10);
+    setTTopLengthInches(state.tTopLengthInches ?? 0);
+    setTStemWidthFt(state.tStemWidthFt ?? 10);
+    setTStemWidthInches(state.tStemWidthInches ?? 0);
+    setTStemLengthFt(state.tStemLengthFt ?? 20);
+    setTStemLengthInches(state.tStemLengthInches ?? 0);
+
     setUWalls(state.uWalls || { w1: 30, w2: 40, w3: 10, w4: 20, w5: 10, w6: 20, w7: 10, w8: 40 });
     setUWallsInches(state.uWallsInches || { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0, w6: 0, w7: 0, w8: 0 });
     setUDirection(state.uDirection);
@@ -1615,51 +1785,76 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
     setFoundationFinish(state.foundationFinish || 'none');
     setGenerationSection(state.generationSection || 'all');
     setPdfImages(state.pdfImages || []);
-    setSelectedPdfIndex(state.selectedPdfIndex || 0);
-    setPdfScale(state.pdfScale || 1);
+    setSelectedPdfIndex(state.selectedPdfIndex ?? 0);
+    setPdfScale(state.pdfScale ?? 1);
     setPdfOffset(state.pdfOffset || { x: 0, y: 0 });
-    setPdfRotation(state.pdfRotation || 0);
-    setPdfOpacity(state.pdfOpacity || 0.5);
-    setIsBlueprintLocked(state.isBlueprintLocked || false);
+    setPdfRotation(state.pdfRotation ?? 0);
+    setPdfOpacity(state.pdfOpacity ?? 0.5);
+    setIsBlueprintLocked(state.isBlueprintLocked ?? false);
     setPdfCalibration(state.pdfCalibration || { p1: null, p2: null, realLengthIn: 0 });
     setFoundationType(state.foundationType || 'stem-wall');
-    setShowGround(state.showGround !== undefined ? state.showGround : true);
-    setShowSky(state.showSky !== undefined ? state.showSky : true);
-    setShowSun(state.showSun !== undefined ? state.showSun : true);
-    setSunHour(state.sunHour !== undefined ? state.sunHour : 14);
-    setSunMonth(state.sunMonth !== undefined ? state.sunMonth : 6);
-    setSiteLatitude(state.siteLatitude !== undefined ? state.siteLatitude : 39.5);
+    setShowGround(state.showGround ?? true);
+    setShowSky(state.showSky ?? true);
+    setShowSun(state.showSun ?? true);
+    setSunHour(state.sunHour ?? 14);
+    setSunMonth(state.sunMonth ?? 6);
+    setSiteLatitude(state.siteLatitude ?? 39.5);
     setHdriPreset(state.hdriPreset || 'city');
     setCustomHdriUrl(state.customHdriUrl || '');
-    setSlabThicknessIn(state.slabThicknessIn || 4);
-    setThickenedEdgeDepthIn(state.thickenedEdgeDepthIn || 12);
-    setStemWallHeightIn(state.stemWallHeightIn || 24);
-    setStemWallThicknessIn(state.stemWallThicknessIn || 8);
-    setFootingWidthIn(state.footingWidthIn || 16);
-    setFootingThicknessIn(state.footingThicknessIn || 8);
+    setSlabThicknessIn(state.slabThicknessIn ?? 4);
+    setThickenedEdgeDepthIn(state.thickenedEdgeDepthIn ?? 12);
+    setStemWallHeightIn(state.stemWallHeightIn ?? 24);
+    setStemWallThicknessIn(state.stemWallThicknessIn ?? 8);
+    setFootingWidthIn(state.footingWidthIn ?? 16);
+    setFootingThicknessIn(state.footingThicknessIn ?? 8);
     setFoundationShape(state.foundationShape || 'rectangle');
-    setAddFloorFraming(state.addFloorFraming || false);
-    setJoistSpacing(state.joistSpacing || 16);
+    setAddFloorFraming(state.addFloorFraming ?? false);
+    setJoistSpacing(state.joistSpacing ?? 16);
     setJoistSize(state.joistSize || '2x10');
     setJoistDirection(state.joistDirection || 'y');
-    setAddSubfloor(state.addSubfloor !== undefined ? state.addSubfloor : true);
-    setSubfloorThickness(state.subfloorThickness || 0.75);
+    setFloorBays(state.floorBays || []);
+    setAddSubfloor(state.addSubfloor ?? true);
+    setSubfloorThickness(state.subfloorThickness ?? 0.75);
     setSubfloorMaterial(state.subfloorMaterial || 'osb');
-    setRimJoistThickness(state.rimJoistThickness || 1.5);
-    setGenerateDimensions(state.generateDimensions !== undefined ? state.generateDimensions : true);
-    setSolidWallsOnly(state.solidWallsOnly || false);
-    setNoFramingFloorOnly(state.noFramingFloorOnly || false);
-    setAdditionalStories(state.additionalStories || 0);
-    setCurrentFloorIndex(state.currentFloorIndex || 0);
-    setUpperFloorWallHeightFt(state.upperFloorWallHeightFt || 8);
-    setUpperFloorWallHeightIn(state.upperFloorWallHeightIn || 0);
+    setRimJoistThickness(state.rimJoistThickness ?? 1.5);
+    setGenerateDimensions(state.generateDimensions ?? true);
+    setSolidWallsOnly(state.solidWallsOnly ?? false);
+    setNoFramingFloorOnly(state.noFramingFloorOnly ?? false);
+    setEnableGirderSystem(state.enableGirderSystem ?? false);
+    setGirderSpanThresholdFt(state.girderSpanThresholdFt ?? 12);
+    setGirderPostSpacingFt(state.girderPostSpacingFt ?? 8);
+    setGirderSize(state.girderSize || '3-2x10');
+    setGirderPostSize(state.girderPostSize || '6x6');
+    setGirderPierSize(state.girderPierSize || '12" Round');
+    setAddPocketBeams(state.addPocketBeams ?? true);
+    setPocketBeamsOnlyAtGirderEnds(state.pocketBeamsOnlyAtGirderEnds ?? false);
+    setAdditionalStories(state.additionalStories ?? 0);
+    setCurrentFloorIndex(state.currentFloorIndex ?? 0);
+    setUpperFloorWallHeightFt(state.upperFloorWallHeightFt ?? 8);
+    setUpperFloorWallHeightIn(state.upperFloorWallHeightIn ?? 0);
     setUpperFloorJoistSize(state.upperFloorJoistSize || '2x10');
     setCombinedBlocks(state.combinedBlocks || []);
     setShapeBlocks(state.shapeBlocks || []);
-    setMaterialCosts(state.materialCosts || DEFAULT_MATERIAL_COSTS);
+    setMaterialCosts({ ...DEFAULT_MATERIAL_COSTS, ...(state.materialCosts || {}) });
+    setCustomCostItems(state.customCostItems || []);
     setAssets(state.assets || []);
     setDormers(state.dormers || []);
     setRoofGroups(state.roofGroups || []);
+
+    // Roof properties
+    setRoofType(state.roofType || 'gable');
+    setRoofPitch(state.roofPitch ?? 4);
+    setRoofOverhangIn(state.roofOverhangIn ?? 12);
+    setTrussSpacing(state.trussSpacing ?? 24);
+    setTrussType(state.trussType || 'standard');
+    setCustomTrussScript(state.customTrussScript || '');
+    setRoofSheathingThickness(state.roofSheathingThickness ?? 0.5);
+    setRoofWidthIn(state.roofWidthIn ?? 240);
+    setRoofHeightIn(state.roofHeightIn ?? 120);
+    setRoofParts(state.roofParts || []);
+    setTrussRuns(state.trussRuns || []);
+    setCustomCameras(state.customCameras || []);
+    setSelectedRoofPartId(state.selectedRoofPartId || null);
   }, []);
 
   useEffect(() => {
@@ -1698,6 +1893,32 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
       isRestoring.current = false;
     }, 500);
   }, [restoreState]);
+
+  // Hydrate state from global context payload (initialState).
+  // Runs on initial mount AND when initialState changes from external sources
+  // (file load, project reset). Skips re-hydration from the bridge's own writes.
+  const lastHydratedRef = useRef<any>(null);
+  useEffect(() => {
+    // Skip if initialState hasn't actually changed (same object reference)
+    if (initialState === lastHydratedRef.current) return;
+    lastHydratedRef.current = initialState;
+
+    // Skip if this is the bridge's own write echoing back — the bridge
+    // stores the currentState ref it sent out in lastBridgedStateRef.
+    // File loads produce a freshly-deserialized object that won't match.
+    if (initialState === lastBridgedStateRef.current) return;
+
+    if (!initialState) return; // No saved state to hydrate
+
+    isRestoring.current = true;
+    restoreState(initialState);
+    setPast([]);
+    setFuture([]);
+    setTimeout(() => {
+      isRestoring.current = false;
+    }, 500);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialState]);
 
   const handleUndo = () => {
     if (saveTimeoutRef.current) {
@@ -2223,6 +2444,30 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
           const side: 1 | -1 = below ? -1 : 1;
           if (startX === null || side !== currentSide) {
             if (startX !== null) {
+              const segLen = sortedX[i] - startX;
+              if (segLen > 0) {
+                newWalls.push({
+                  id: wallId++,
+                  orientation: 'horizontal',
+                  xFt: Math.floor(startX / 12),
+                  xInches: startX % 12,
+                  yFt: Math.floor(sortedY[j] / 12),
+                  yInches: sortedY[j] % 12,
+                  lengthFt: Math.floor(segLen / 12),
+                  lengthInches: segLen % 12,
+                  thicknessIn: wallThicknessIn,
+                  exteriorSide: currentSide,
+                  floorIndex: currentFloorIndex
+                });
+              }
+            }
+            startX = sortedX[i];
+            currentSide = side;
+          }
+        } else {
+          if (startX !== null) {
+            const segLen2 = sortedX[i] - startX;
+            if (segLen2 > 0) {
               newWalls.push({
                 id: wallId++,
                 orientation: 'horizontal',
@@ -2230,46 +2475,34 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
                 xInches: startX % 12,
                 yFt: Math.floor(sortedY[j] / 12),
                 yInches: sortedY[j] % 12,
-                lengthFt: Math.floor((sortedX[i] - startX) / 12),
-                lengthInches: (sortedX[i] - startX) % 12,
+                lengthFt: Math.floor(segLen2 / 12),
+                lengthInches: segLen2 % 12,
                 thicknessIn: wallThicknessIn,
-                exteriorSide: currentSide
+                exteriorSide: currentSide,
+                floorIndex: currentFloorIndex
               });
             }
-            startX = sortedX[i];
-            currentSide = side;
-          }
-        } else {
-          if (startX !== null) {
-            newWalls.push({
-              id: wallId++,
-              orientation: 'horizontal',
-              xFt: Math.floor(startX / 12),
-              xInches: startX % 12,
-              yFt: Math.floor(sortedY[j] / 12),
-              yInches: sortedY[j] % 12,
-              lengthFt: Math.floor((sortedX[i] - startX) / 12),
-              lengthInches: (sortedX[i] - startX) % 12,
-              thicknessIn: wallThicknessIn,
-              exteriorSide: currentSide
-            });
             startX = null;
           }
         }
       }
       if (startX !== null) {
-        newWalls.push({
-          id: wallId++,
-          orientation: 'horizontal',
-          xFt: Math.floor(startX / 12),
-          xInches: startX % 12,
-          yFt: Math.floor(sortedY[j] / 12),
-          yInches: sortedY[j] % 12,
-          lengthFt: Math.floor((sortedX[sortedX.length-1] - startX) / 12),
-          lengthInches: (sortedX[sortedX.length-1] - startX) % 12,
-          thicknessIn: wallThicknessIn,
-          exteriorSide: currentSide
-        });
+        const segLen3 = sortedX[sortedX.length-1] - startX;
+        if (segLen3 > 0) {
+          newWalls.push({
+            id: wallId++,
+            orientation: 'horizontal',
+            xFt: Math.floor(startX / 12),
+            xInches: startX % 12,
+            yFt: Math.floor(sortedY[j] / 12),
+            yInches: sortedY[j] % 12,
+            lengthFt: Math.floor(segLen3 / 12),
+            lengthInches: segLen3 % 12,
+            thicknessIn: wallThicknessIn,
+            exteriorSide: currentSide,
+            floorIndex: currentFloorIndex
+          });
+        }
       }
     }
 
@@ -2286,6 +2519,30 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
           const side: 1 | -1 = right ? -1 : 1;
           if (startY === null || side !== currentSide) {
             if (startY !== null) {
+              const vSegLen = sortedY[j] - startY;
+              if (vSegLen > 0) {
+                newWalls.push({
+                  id: wallId++,
+                  orientation: 'vertical',
+                  xFt: Math.floor(sortedX[i] / 12),
+                  xInches: sortedX[i] % 12,
+                  yFt: Math.floor(startY / 12),
+                  yInches: startY % 12,
+                  lengthFt: Math.floor(vSegLen / 12),
+                  lengthInches: vSegLen % 12,
+                  thicknessIn: wallThicknessIn,
+                  exteriorSide: currentSide,
+                  floorIndex: currentFloorIndex
+                });
+              }
+            }
+            startY = sortedY[j];
+            currentSide = side;
+          }
+        } else {
+          if (startY !== null) {
+            const vSegLen2 = sortedY[j] - startY;
+            if (vSegLen2 > 0) {
               newWalls.push({
                 id: wallId++,
                 orientation: 'vertical',
@@ -2293,46 +2550,34 @@ export default function App({ onDesignChange, currentProject, setCurrentProject,
                 xInches: sortedX[i] % 12,
                 yFt: Math.floor(startY / 12),
                 yInches: startY % 12,
-                lengthFt: Math.floor((sortedY[j] - startY) / 12),
-                lengthInches: (sortedY[j] - startY) % 12,
+                lengthFt: Math.floor(vSegLen2 / 12),
+                lengthInches: vSegLen2 % 12,
                 thicknessIn: wallThicknessIn,
-                exteriorSide: currentSide
+                exteriorSide: currentSide,
+                floorIndex: currentFloorIndex
               });
             }
-            startY = sortedY[j];
-            currentSide = side;
-          }
-        } else {
-          if (startY !== null) {
-            newWalls.push({
-              id: wallId++,
-              orientation: 'vertical',
-              xFt: Math.floor(sortedX[i] / 12),
-              xInches: sortedX[i] % 12,
-              yFt: Math.floor(startY / 12),
-              yInches: startY % 12,
-              lengthFt: Math.floor((sortedY[j] - startY) / 12),
-              lengthInches: (sortedY[j] - startY) % 12,
-              thicknessIn: wallThicknessIn,
-              exteriorSide: currentSide
-            });
             startY = null;
           }
         }
       }
       if (startY !== null) {
-        newWalls.push({
-          id: wallId++,
-          orientation: 'vertical',
-          xFt: Math.floor(sortedX[i] / 12),
-          xInches: sortedX[i] % 12,
-          yFt: Math.floor(startY / 12),
-          yInches: startY % 12,
-          lengthFt: Math.floor((sortedY[sortedY.length-1] - startY) / 12),
-          lengthInches: (sortedY[sortedY.length-1] - startY) % 12,
-          thicknessIn: wallThicknessIn,
-          exteriorSide: currentSide
-        });
+        const vSegLen3 = sortedY[sortedY.length-1] - startY;
+        if (vSegLen3 > 0) {
+          newWalls.push({
+            id: wallId++,
+            orientation: 'vertical',
+            xFt: Math.floor(sortedX[i] / 12),
+            xInches: sortedX[i] % 12,
+            yFt: Math.floor(startY / 12),
+            yInches: startY % 12,
+            lengthFt: Math.floor(vSegLen3 / 12),
+            lengthInches: vSegLen3 % 12,
+            thicknessIn: wallThicknessIn,
+            exteriorSide: currentSide,
+            floorIndex: currentFloorIndex
+          });
+        }
       }
     }
 
@@ -2857,6 +3102,10 @@ add_subfloor = ${addSubfloor ? 'true' : 'false'}
 subfloor_thickness = ${subfloorThickness}
 subfloor_material = '${subfloorMaterial}'
 rim_joist_thickness = ${rimJoistThickness}
+floor_bays = [
+${floorBays.length > 0 ? floorBays.map(b => `  { label: '${b.label}', dir: '${b.joistDirection}', x: ${b.x}, y: ${b.y}, w: ${b.width}, h: ${b.height} },`).join('
+') : ''}
+]
 
 # --- BUMPOUTS ---
 bumpouts = [
@@ -2910,6 +3159,8 @@ model = Sketchup.active_model
 # --- SETUP TAGS ---
 model.layers.add("Dimensions")
 model.layers.add("Notations")
+model.layers.add("Floor Framing")
+model.layers.add("Subfloor")
 
 is_new_shell = false
 if update_wall_id
@@ -2965,6 +3216,7 @@ draw_box = -> (ents, x, y, z, w, d, h, name) {
 if add_floor_framing && update_wall_id.nil?
   floor_group = framing_group.entities.add_group
   floor_group.name = "Floor System"
+  floor_group.layer = model.layers["Floor Framing"] || model.layers.add("Floor Framing")
   fl_ents = floor_group.entities
   
   joist_h = case joist_size
@@ -2979,7 +3231,44 @@ if add_floor_framing && update_wall_id.nil?
     draw_box.call(fl_ents, x, y, z, w, d, h, "Floor Joist")
   }
   
-  if joist_direction == 'y'
+  if floor_bays.length > 0
+    # --- Per-bay joist rendering ---
+    floor_bays.each do |bay|
+      bx = bay[:x]
+      by = bay[:y]
+      bw = bay[:w]
+      bh = bay[:h]
+      bd = bay[:dir]
+      rt = rim_joist_thickness
+      t = 1.5
+      
+      if bd == 'y'
+        # Rim joists: front and back of bay
+        draw_box.call(fl_ents, bx, by, -joist_h, bw, rt, joist_h, "Rim Joist")
+        draw_box.call(fl_ents, bx, by + bh - rt, -joist_h, bw, rt, joist_h, "Rim Joist")
+        # Joists spaced along X, each runs along Y
+        num_j = (bw / joist_spacing).ceil + 1
+        num_j.times do |i|
+          jx = bx + i * joist_spacing
+          jx = bx + bw - t if jx + t > bx + bw
+          jx = bx if jx < bx
+          draw_joist.call(jx, by + rt, -joist_h, t, bh - 2 * rt, joist_h)
+        end
+      else
+        # Rim joists: left and right of bay
+        draw_box.call(fl_ents, bx, by, -joist_h, rt, bh, joist_h, "Rim Joist")
+        draw_box.call(fl_ents, bx + bw - rt, by, -joist_h, rt, bh, joist_h, "Rim Joist")
+        # Joists spaced along Y, each runs along X
+        num_j = (bh / joist_spacing).ceil + 1
+        num_j.times do |i|
+          jy = by + i * joist_spacing
+          jy = by + bh - t if jy + t > by + bh
+          jy = by if jy < by
+          draw_joist.call(bx + rt, jy, -joist_h, bw - 2 * rt, t, joist_h)
+        end
+      end
+    end
+  elsif joist_direction == 'y'
     # Rim joists (front and back)
     draw_box.call(fl_ents, 0, 0, -joist_h, w, rim_joist_thickness, joist_h, "Rim Joist")
     if shape == 'rectangle'
@@ -3062,6 +3351,7 @@ if add_floor_framing && update_wall_id.nil?
     sf_z = 0
     sf_group = fl_ents.add_group
     sf_group.name = "Subfloor"
+    sf_group.layer = model.layers["Subfloor"] || model.layers.add("Subfloor")
     
     # Material
     mat_name = subfloor_material == 'plywood' ? "Subfloor_Plywood" : "Subfloor_OSB"
@@ -5267,6 +5557,91 @@ end
                       />
                     </div>
                   </div>
+
+                  {/* ── Per-Bay Joist Direction Controls ── */}
+                  {shape !== 'rectangle' && (
+                    <div className="space-y-2 mt-1">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                          Per-Bay Direction
+                        </label>
+                        <div className="flex gap-1.5">
+                          {floorBays.length === 0 ? (
+                            <button
+                              onClick={() => {
+                                const bays = detectBays(currentState);
+                                if (bays.length > 0) setFloorBays(bays);
+                              }}
+                              className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider bg-indigo-500 hover:bg-indigo-600 text-white rounded-md transition-colors flex items-center gap-1"
+                            >
+                              <Layers size={10} />
+                              Auto-Detect Bays
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => setFloorBays([])}
+                              className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-600 dark:text-zinc-300 rounded-md transition-colors"
+                            >
+                              Reset to Global
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {floorBays.length > 0 && (
+                        <div className="space-y-1 bg-zinc-50 dark:bg-[#151a2e]/60 rounded-lg border border-zinc-200 dark:border-[#243052] p-2">
+                          {floorBays.map((bay, idx) => (
+                            <div key={bay.id} className="flex items-center justify-between gap-2 py-1.5 px-2 rounded-md bg-white dark:bg-[#0f1424] border border-zinc-100 dark:border-[#1c2240]">
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 truncate">
+                                  {bay.label}
+                                </div>
+                                <div className="text-[9px] text-zinc-400 dark:text-zinc-500 font-medium">
+                                  {formatBayDimensions(bay)}
+                                </div>
+                              </div>
+                              <div className="flex gap-0.5 bg-zinc-100 dark:bg-[#151a2e]/80 p-0.5 rounded-md border border-zinc-200 dark:border-[#243052]">
+                                <button
+                                  onClick={() => {
+                                    setFloorBays(prev => prev.map((b, i) =>
+                                      i === idx ? { ...b, joistDirection: 'x' } : b
+                                    ));
+                                  }}
+                                  className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${
+                                    bay.joistDirection === 'x'
+                                      ? 'bg-indigo-500 text-white shadow-sm'
+                                      : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
+                                  }`}
+                                  title="Joists span along X axis"
+                                >
+                                  → X
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setFloorBays(prev => prev.map((b, i) =>
+                                      i === idx ? { ...b, joistDirection: 'y' } : b
+                                    ));
+                                  }}
+                                  className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${
+                                    bay.joistDirection === 'y'
+                                      ? 'bg-indigo-500 text-white shadow-sm'
+                                      : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
+                                  }`}
+                                  title="Joists span along Y axis"
+                                >
+                                  ↓ Y
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                          <div className="text-[9px] text-zinc-400 dark:text-zinc-500 text-center mt-1 font-medium italic">
+                            Each bay defaults to span the shorter dimension
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1.5 flex flex-col justify-center">
                       <label className="flex items-center gap-2 cursor-pointer mt-2">
@@ -5306,6 +5681,117 @@ end
                       </select>
                     </div>
                   )}
+
+                  {/* Girder Support System */}
+                  <div className="border-t border-zinc-200 dark:border-[#243052] pt-4 mt-4 space-y-4">
+                    <div className="flex items-center gap-2 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        id="enableGirderSystem"
+                        checked={enableGirderSystem}
+                        onChange={(e) => setEnableGirderSystem(e.target.checked)}
+                        className="rounded border-zinc-300 dark:border-[#243052] text-indigo-600 dark:text-indigo-500 focus:ring-indigo-500 dark:focus:ring-indigo-400 dark:bg-[#151a2e]"
+                      />
+                      <label htmlFor="enableGirderSystem" className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider cursor-pointer">
+                        Add Girder Support System
+                      </label>
+                    </div>
+
+                    {enableGirderSystem && (
+                      <div className="space-y-4 pt-2">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Span Threshold (ft)</label>
+                            <input 
+                              type="number" 
+                              step="any"
+                              value={girderSpanThresholdFt} 
+                              onChange={(e) => setGirderSpanThresholdFt(Number(e.target.value))}
+                              onFocus={(e) => e.target.select()}
+                              className="w-full px-3 py-4 bg-white dark:bg-[#0f1424] border border-zinc-200 dark:border-[#243052] rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-xl font-bold text-zinc-900 dark:text-zinc-100"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Post Spacing (ft)</label>
+                            <input 
+                              type="number" 
+                              step="any"
+                              value={girderPostSpacingFt} 
+                              onChange={(e) => setGirderPostSpacingFt(Number(e.target.value))}
+                              onFocus={(e) => e.target.select()}
+                              className="w-full px-3 py-4 bg-white dark:bg-[#0f1424] border border-zinc-200 dark:border-[#243052] rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-xl font-bold text-zinc-900 dark:text-zinc-100"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Girder Size</label>
+                            <select 
+                              value={girderSize} 
+                              onChange={(e) => setGirderSize(e.target.value as any)}
+                              className="w-full px-2 py-3 bg-white dark:bg-[#0f1424] border border-zinc-200 dark:border-[#243052] rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm font-bold text-zinc-900 dark:text-zinc-100"
+                            >
+                              <option value="2-2x10">Double 2x10</option>
+                              <option value="3-2x10">Triple 2x10</option>
+                              <option value="4-2x10">Quad 2x10</option>
+                              <option value="6x6">Solid 6x6</option>
+                              <option value="6x8">Solid 6x8</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Post Size</label>
+                            <select 
+                              value={girderPostSize} 
+                              onChange={(e) => setGirderPostSize(e.target.value as any)}
+                              className="w-full px-2 py-3 bg-white dark:bg-[#0f1424] border border-zinc-200 dark:border-[#243052] rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm font-bold text-zinc-900 dark:text-zinc-100"
+                            >
+                              <option value="4x4">4x4 Wood</option>
+                              <option value="6x6">6x6 Wood</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Pier Size</label>
+                            <select 
+                              value={girderPierSize} 
+                              onChange={(e) => setGirderPierSize(e.target.value as any)}
+                              className="w-full px-2 py-3 bg-white dark:bg-[#0f1424] border border-zinc-200 dark:border-[#243052] rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm font-bold text-zinc-900 dark:text-zinc-100"
+                            >
+                              <option value="12&quot; Round">12" Round</option>
+                              <option value="16&quot; Square">16" Square</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 cursor-pointer pt-2">
+                          <input 
+                            type="checkbox" 
+                            id="addPocketBeams"
+                            checked={addPocketBeams}
+                            onChange={(e) => setAddPocketBeams(e.target.checked)}
+                            className="rounded border-zinc-300 dark:border-[#243052] text-indigo-600 dark:text-indigo-500 focus:ring-indigo-500 dark:focus:ring-indigo-400 dark:bg-[#151a2e]"
+                          />
+                          <label htmlFor="addPocketBeams" className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider cursor-pointer">
+                            Add Pocket Beams at Transitions
+                          </label>
+                        </div>
+                        {addPocketBeams && (
+                          <div className="flex items-center gap-2 cursor-pointer pl-4 pt-1">
+                            <input 
+                              type="checkbox" 
+                              id="pocketBeamsOnlyAtGirderEnds"
+                              checked={pocketBeamsOnlyAtGirderEnds}
+                              onChange={(e) => setPocketBeamsOnlyAtGirderEnds(e.target.checked)}
+                              className="rounded border-zinc-300 dark:border-[#243052] text-indigo-600 dark:text-indigo-500 focus:ring-indigo-500 dark:focus:ring-indigo-400 dark:bg-[#151a2e]"
+                            />
+                            <label htmlFor="pocketBeamsOnlyAtGirderEnds" className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider cursor-pointer">
+                              Only at Girder Ends
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -7847,7 +8333,9 @@ className="w-20 px-2 py-1 bg-white dark:bg-[#0f1424] border border-zinc-200 dark
               state={currentState} 
               getWallLength={getWallLength}
               getAvailableWallOptions={getAvailableWallOptions}
-              onUpdateCosts={(costs) => setMaterialCosts(costs)} 
+              onUpdateCosts={(costs) => setMaterialCosts(costs)}
+              customCostItems={customCostItems}
+              onUpdateCustomItems={setCustomCostItems}
             />
           )}
         </div>
@@ -8713,9 +9201,18 @@ className="w-20 px-2 py-1 bg-white dark:bg-[#0f1424] border border-zinc-200 dark
                 joistSpacing={joistSpacing}
                 joistSize={joistSize}
                 joistDirection={joistDirection}
+                floorBays={floorBays}
                 addSubfloor={addSubfloor}
                 subfloorThickness={subfloorThickness}
                 subfloorMaterial={subfloorMaterial}
+                enableGirderSystem={enableGirderSystem}
+                girderSpanThresholdFt={girderSpanThresholdFt}
+                girderPostSpacingFt={girderPostSpacingFt}
+                girderSize={girderSize}
+                girderPostSize={girderPostSize}
+                girderPierSize={girderPierSize}
+                addPocketBeams={addPocketBeams}
+                pocketBeamsOnlyAtGirderEnds={pocketBeamsOnlyAtGirderEnds}
                 pdfImages={pdfImages}
                 selectedPdfIndex={selectedPdfIndex}
                 pdfScale={pdfScale}
@@ -8826,10 +9323,19 @@ className="w-20 px-2 py-1 bg-white dark:bg-[#0f1424] border border-zinc-200 dark
                 joistSpacing={joistSpacing}
                 joistSize={joistSize}
                 joistDirection={joistDirection}
+                floorBays={floorBays}
                 addSubfloor={addSubfloor}
                 subfloorThickness={subfloorThickness}
                 subfloorMaterial={subfloorMaterial}
                 rimJoistThickness={rimJoistThickness}
+                enableGirderSystem={enableGirderSystem}
+                girderSpanThresholdFt={girderSpanThresholdFt}
+                girderPostSpacingFt={girderPostSpacingFt}
+                girderSize={girderSize}
+                girderPostSize={girderPostSize}
+                girderPierSize={girderPierSize}
+                addPocketBeams={addPocketBeams}
+                pocketBeamsOnlyAtGirderEnds={pocketBeamsOnlyAtGirderEnds}
                 addInsulation={addInsulation}
                 insulationThickness={insulationThickness}
                 addSheathing={addSheathing}

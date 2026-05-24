@@ -32,8 +32,9 @@ export const generateSketchUpCode = (state: AppState, section: GenerationSection
     foundationType, slabThicknessIn, thickenedEdgeDepthIn,
     stemWallHeightIn, stemWallThicknessIn,
     footingWidthIn, footingThicknessIn, foundationShape,
-    addFloorFraming, joistSpacing, joistSize, joistDirection,
+    addFloorFraming, joistSpacing, joistSize, joistDirection, floorBays,
     addSubfloor, subfloorThickness, subfloorMaterial, rimJoistThickness,
+    enableGirderSystem, girderSpanThresholdFt, girderPostSpacingFt, girderSize, girderPostSize, girderPierSize, addPocketBeams, pocketBeamsOnlyAtGirderEnds,
     generateDimensions, solidWallsOnly,
     additionalStories, upperFloorWallHeightFt, upperFloorWallHeightIn, upperFloorJoistSize,
     combinedBlocks, shapeBlocks,
@@ -75,6 +76,10 @@ export const generateSketchUpCode = (state: AppState, section: GenerationSection
   const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
   const combinedBlocksRuby = (blocksToUse || []).map(b => 
     `  {id: '${b.id}', x: ${b.x}, y: ${b.y}, w: ${b.w}, h: ${b.h}}`
+  ).join(",\n");
+
+  const floorBaysRuby = (floorBays || []).map(b => 
+    `  { label: '${b.label}', dir: '${b.joistDirection}', x: ${b.x}, y: ${b.y}, w: ${b.width}, h: ${b.height} }`
   ).join(",\n");
 
   const interiorWallsRuby = interiorWalls.map(w => {
@@ -236,6 +241,17 @@ joist_direction = '${joistDirection}'
 add_subfloor = ${addSubfloor ? 'true' : 'false'}
 subfloor_thickness = ${subfloorThickness}
 rim_joist_thickness = ${rimJoistThickness}
+enable_girder_system = ${enableGirderSystem ? 'true' : 'false'}
+girder_span_threshold = ${girderSpanThresholdFt}
+girder_post_spacing = ${girderPostSpacingFt}
+girder_size = '${girderSize}'
+girder_post_size = '${girderPostSize}'
+girder_pier_size = '${girderPierSize}'
+add_pocket_beams = ${addPocketBeams ? 'true' : 'false'}
+pocket_beams_only_at_girder_ends = ${pocketBeamsOnlyAtGirderEnds ? 'true' : 'false'}
+floor_bays = [
+${floorBaysRuby}
+]
 
 # --- MULTI-STORY OPTIONS ---
 additional_stories = ${additionalStories}
@@ -1121,6 +1137,43 @@ begin
       end
       mat = get_material.call("Floor System Solid", "#e4e4e7")
       j_group.material = mat
+    elsif floor_bays.length > 0
+      floor_bays.each do |bay|
+        bx = bay[:x].to_f
+        by = bay[:y].to_f
+        bw = bay[:w].to_f
+        bh = bay[:h].to_f
+        dir = bay[:dir]
+        curr_rt = rim_joist_thickness
+
+        if dir == 'y'
+          # Rim joists: front and back of bay (along X)
+          draw_box.call(j_group.entities, bx, by, j_z, bw, curr_rt, curr_joist_h, "Rim Joist")
+          draw_box.call(j_group.entities, bx, by + bh - curr_rt, j_z, bw, curr_rt, curr_joist_h, "Rim Joist")
+          
+          # Individual joists spaced along X, running along Y
+          num_j = (bw / joist_spacing).ceil + 1
+          num_j.times do |i|
+            jx = bx + i * joist_spacing
+            jx = bx + bw - t if jx + t > bx + bw
+            jx = bx if jx < bx
+            draw_box.call(j_group.entities, jx, by + curr_rt, j_z, t, bh - 2 * curr_rt, curr_joist_h, "Floor Joist")
+          end
+        else
+          # Rim joists: left and right of bay (along Y)
+          draw_box.call(j_group.entities, bx, by, j_z, curr_rt, bh, curr_joist_h, "Rim Joist")
+          draw_box.call(j_group.entities, bx + bw - curr_rt, by, j_z, curr_rt, bh, curr_joist_h, "Rim Joist")
+          
+          # Individual joists spaced along Y, running along X
+          num_j = (bh / joist_spacing).ceil + 1
+          num_j.times do |i|
+            jy = by + i * joist_spacing
+            jy = by + bh - t if jy + t > by + bh
+            jy = by if jy < by
+            draw_box.call(j_group.entities, bx + curr_rt, jy, j_z, bw - 2 * curr_rt, t, curr_joist_h, "Floor Joist")
+          end
+        end
+      end
     elsif joist_direction == 'y'
       # Rim joists (front and back)
       draw_box.call(j_group.entities, min_x, min_y, j_z, local_w, rt, curr_joist_h, "Rim Joist")
@@ -1235,6 +1288,414 @@ begin
         end
       end
     end
+
+    # --- Floor Girder Support System ---
+    if enable_girder_system && !solid_walls_only
+      puts "Generating floor girders, posts, and concrete piers..."
+      
+      # Determine girder size dimensions
+      beam_w = 4.5 # default triple 2x10
+      beam_d = 9.25 # default 2x10
+      
+      if girder_size == '2-2x10'
+        beam_w = 3.0
+      elsif girder_size == '4-2x10'
+        beam_w = 6.0
+      elsif girder_size == '6x6'
+        beam_w = 5.5
+        beam_d = 5.5
+      elsif girder_size == '6x8'
+        beam_w = 5.5
+        beam_d = 7.5
+      end
+      
+      post_dim = girder_post_size == '4x4' ? 3.5 : 5.5
+      is_round = girder_pier_size.include?("Round")
+      pier_dia = 12.0
+      pier_sq = 16.0
+      depth_in = 24.0 # frost depth
+      
+      # Create specialized groups and layers for support components
+      g_group = fl_ents.add_group
+      g_group.name = "Floor Girders"
+      g_group.layer = model.layers.add("Floor Girders")
+      
+      post_group = fl_ents.add_group
+      post_group.name = "Floor Support Posts"
+      post_group.layer = model.layers.add("Floor Support Posts")
+      
+      pier_group = fl_ents.add_group
+      pier_group.name = "Floor Piers"
+      pier_group.layer = model.layers.add("Floor Piers")
+
+      bracket_group = fl_ents.add_group
+      bracket_group.name = "Floor Girder Brackets"
+      bracket_group.layer = model.layers.add("Floor Girder Brackets")
+      
+      # Helper to draw a concrete cylinder pier in Ruby
+      draw_cylinder = -> (ents, cx, cy, cz, radius, height, name) {
+        group = ents.add_group
+        group.name = name
+        circle = group.entities.add_circle(Geom::Point3d.new(cx, cy, cz), Geom::Vector3d.new(0, 0, 1), radius, 16)
+        face = group.entities.add_face(circle)
+        if face
+          face.reverse! if face.normal.z < 0
+          face.pushpull(height)
+        end
+        group
+      }
+      
+      # Active bays list
+      active_bays = []
+      if floor_bays.length > 0
+        active_bays = floor_bays
+      else
+        # Fallback global bay matching the building boundaries
+        active_bays = [{
+          id: 'bay-main',
+          x: min_x,
+          y: min_y,
+          w: local_w,
+          h: local_l,
+          dir: joist_direction
+        }]
+      end
+      
+      # --- Pocket Beams & Boundaries Detection (Interior Transitions) ---
+      boundaries = []
+      if add_pocket_beams && active_bays.length > 1
+        (0...active_bays.length).each do |i|
+          ((i + 1)...active_bays.length).each do |k|
+            bayA = active_bays[i]
+            bayB = active_bays[k]
+            
+            ax = bayA[:x].to_f
+            ay = bayA[:y].to_f
+            aw = bayA[:w].to_f
+            ah = bayA[:h].to_f
+            
+            bx = bayB[:x].to_f
+            by = bayB[:y].to_f
+            bw = bayB[:w].to_f
+            bh = bayB[:h].to_f
+            
+            # Check vertical touch (A is left of B)
+            if (ax + aw - bx).abs < 0.1
+              yStart = [ay, by].max
+              yEnd = [ay + ah, by + bh].min
+              if yStart < yEnd - 0.1
+                boundaries << { id: "boundary-v-#{i}-#{k}", dir: 'y', coord: bx, start: yStart, end: yEnd }
+              end
+            # Check vertical touch (B is left of A)
+            elsif (bx + bw - ax).abs < 0.1
+              yStart = [ay, by].max
+              yEnd = [ay + ah, by + bh].min
+              if yStart < yEnd - 0.1
+                boundaries << { id: "boundary-v-#{k}-#{i}", dir: 'y', coord: ax, start: yStart, end: yEnd }
+              end
+            end
+            
+            # Check horizontal touch (A is above B)
+            if (ay + ah - by).abs < 0.1
+              xStart = [ax, bx].max
+              xEnd = [ax + aw, bx + bw].min
+              if xStart < xEnd - 0.1
+                boundaries << { id: "boundary-h-#{i}-#{k}", dir: 'x', coord: by, start: xStart, end: xEnd }
+              end
+            # Check horizontal touch (B is above A)
+            elsif (by + bh - ay).abs < 0.1
+              xStart = [ax, bx].max
+              xEnd = [ax + aw, bx + bw].min
+              if xStart < xEnd - 0.1
+                boundaries << { id: "boundary-h-#{k}-#{i}", dir: 'x', coord: ay, start: xStart, end: xEnd }
+              end
+            end
+          end
+        end
+
+        # Filter boundaries if pocket_beams_only_at_girder_ends is true
+        if pocket_beams_only_at_girder_ends && boundaries.length > 0
+          girder_endpoints = []
+          if enable_girder_system
+            active_bays.each do |bay|
+              bx = bay[:x].to_f
+              by = bay[:y].to_f
+              bw = bay[:w].to_f
+              bh = bay[:h].to_f
+              dir = floor_bays.length > 0 ? bay[:dir] : joist_direction
+              
+              is_span_y = (dir == 'y')
+              span_in = is_span_y ? bh : bw
+              girder_len = is_span_y ? bw : bh
+              threshold_in = girder_span_threshold * 12
+              
+              next if span_in <= threshold_in
+              
+              num_spaces = (span_in / threshold_in).ceil
+              num_girders = num_spaces - 1
+              
+              (1..num_girders).each do |g_idx|
+                offset = g_idx * (span_in.to_f / num_spaces)
+                if is_span_y
+                  girder_endpoints << { x: bx, y: by + offset }
+                  girder_endpoints << { x: bx + bw, y: by + offset }
+                else
+                  girder_endpoints << { x: bx + offset, y: by }
+                  girder_endpoints << { x: bx + offset, y: by + bh }
+                end
+              end
+            end
+          end
+          
+          # Filter boundaries
+          filtered_boundaries = []
+          boundaries.each do |b|
+            has_endpoint = false
+            girder_endpoints.each do |ep|
+              if b[:dir] == 'y'
+                if (ep[:x] - b[:coord]).abs < 0.5 && ep[:y] >= b[:start] - 0.5 && ep[:y] <= b[:end] + 0.5
+                  has_endpoint = true
+                  break
+                end
+              else
+                if (ep[:y] - b[:coord]).abs < 0.5 && ep[:x] >= b[:start] - 0.5 && ep[:x] <= b[:end] + 0.5
+                  has_endpoint = true
+                  break
+                end
+              end
+            end
+            if has_endpoint
+              filtered_boundaries << b
+            end
+          end
+          boundaries = filtered_boundaries
+        end
+      end
+
+      # Helper to check if a point lies on an interior boundary line
+      is_point_on_boundary = -> (x, y) {
+        boundaries.each do |b|
+          if b[:dir] == 'y'
+            if (x - b[:coord]).abs < 0.5 && y >= b[:start] - 0.5 && y <= b[:end] + 0.5
+              return true
+            end
+          else
+            if (y - b[:coord]).abs < 0.5 && x >= b[:start] - 0.5 && x <= b[:end] + 0.5
+              return true
+            end
+          end
+        end
+        false
+      }
+
+      # Draw Pocket Beams
+      if boundaries.length > 0
+        pocket_group = fl_ents.add_group
+        pocket_group.name = "Floor Pocket Beams"
+        pocket_group.layer = model.layers.add("Floor Pocket Beams")
+        
+        boundaries.each_with_index do |b, idx|
+          pocket_beam_len = b[:end] - b[:start]
+          next if pocket_beam_len < 6.0
+          
+          is_span_y = (b[:dir] == 'y')
+          bx_beam = 0
+          by_beam = 0
+          bw_beam = 0
+          bd_beam = 0
+          
+          if is_span_y
+            bw_beam = beam_w
+            bd_beam = pocket_beam_len
+            bx_beam = b[:coord] - beam_w / 2.0
+            by_beam = b[:start]
+          else
+            bw_beam = pocket_beam_len
+            bd_beam = beam_w
+            bx_beam = b[:start]
+            by_beam = b[:coord] - beam_w / 2.0
+          end
+          
+          beam_z = j_z - beam_d
+          
+          # Draw the pocket beam box
+          draw_box.call(pocket_group.entities, bx_beam, by_beam, beam_z, bw_beam, bd_beam, beam_d, "Pocket Beam")
+          
+          # Space support posts along the pocket beam
+          post_spacing_in = girder_post_spacing * 12
+          num_post_spaces = [1, (pocket_beam_len / post_spacing_in).ceil].max
+          
+          (0..num_post_spaces).each do |k|
+            p_offset = k * (pocket_beam_len.to_f / num_post_spaces)
+            px = is_span_y ? b[:coord] : b[:start] + p_offset
+            py = is_span_y ? b[:start] + p_offset : b[:coord]
+            
+            if k == 0 || k == num_post_spaces
+              # Draw a Simpson wall bracket at the perimeter endpoint
+              br_mat = get_material.call("Simpson Hanger Steel", "#64748b")
+              if k == 0
+                if is_span_y
+                  draw_box.call(bracket_group.entities, px - (beam_w + 1.5) / 2.0, py, beam_z - 0.25, beam_w + 1.5, 2.0, beam_d + 0.25, "Simpson Girder Hanger", br_mat)
+                else
+                  draw_box.call(bracket_group.entities, px, py - (beam_w + 1.5) / 2.0, beam_z - 0.25, 2.0, beam_w + 1.5, beam_d + 0.25, "Simpson Girder Hanger", br_mat)
+                end
+              else
+                if is_span_y
+                  draw_box.call(bracket_group.entities, px - (beam_w + 1.5) / 2.0, py - 2.0, beam_z - 0.25, beam_w + 1.5, 2.0, beam_d + 0.25, "Simpson Girder Hanger", br_mat)
+                else
+                  draw_box.call(bracket_group.entities, px - 2.0, py - (beam_w + 1.5) / 2.0, beam_z - 0.25, 2.0, beam_w + 1.5, beam_d + 0.25, "Simpson Girder Hanger", br_mat)
+                end
+              end
+            else
+              # Draw intermediate support post and concrete pier along pocket beam
+              soil_z = j_z - stem_wall_height
+              reveal_in = 6.0
+              pier_top_z = [beam_z, soil_z + reveal_in].min
+              post_h = [0.0, beam_z - pier_top_z].max
+              pier_bottom_z = soil_z - depth_in
+              pier_h = pier_top_z - pier_bottom_z
+              pier_z = pier_bottom_z
+              
+              if post_h > 0.01
+                draw_box.call(post_group.entities, px - post_dim / 2.0, py - post_dim / 2.0, pier_top_z, post_dim, post_dim, post_h, "Support Post")
+              end
+              
+              if is_round
+                draw_cylinder.call(pier_group.entities, px, py, pier_z, pier_dia / 2.0, pier_h, "Concrete Pier")
+              else
+                draw_box.call(pier_group.entities, px - pier_sq / 2.0, py - pier_sq / 2.0, pier_z, pier_sq, pier_sq, pier_h, "Concrete Pier")
+              end
+            end
+          end
+        end
+      end
+      
+      active_bays.each do |bay|
+        bx = bay[:x].to_f
+        by = bay[:y].to_f
+        bw = bay[:w].to_f
+        bh = bay[:h].to_f
+        dir = floor_bays.length > 0 ? bay[:dir] : joist_direction
+        
+        is_span_y = (dir == 'y')
+        span_in = is_span_y ? bh : bw
+        girder_len = is_span_y ? bw : bh
+        threshold_in = girder_span_threshold * 12
+        post_spacing_in = girder_post_spacing * 12
+        
+        next if span_in <= threshold_in
+        
+        num_spaces = (span_in / threshold_in).ceil
+        num_girders = num_spaces - 1
+        
+        (1..num_girders).each do |i|
+          offset = i * (span_in.to_f / num_spaces)
+          
+          bx_beam = 0
+          by_beam = 0
+          bw_beam = 0
+          bd_beam = 0
+          
+          if is_span_y
+            # Girder parallel to X (runs across the width)
+            bw_beam = girder_len
+            bd_beam = beam_w
+            bx_beam = bx
+            by_beam = by + offset - beam_w / 2.0
+          else
+            # Girder parallel to Y (runs along the depth)
+            bw_beam = beam_w
+            bd_beam = girder_len
+            bx_beam = bx + offset - beam_w / 2.0
+            by_beam = by
+          end
+          
+          beam_z = j_z - beam_d
+          
+          # Draw the beam box
+          draw_box.call(g_group.entities, bx_beam, by_beam, beam_z, bw_beam, bd_beam, beam_d, "Girder Beam")
+          
+          # Space support posts along the girder
+          num_post_spaces = [1, (girder_len / post_spacing_in).ceil].max
+          
+          (0..num_post_spaces).each do |j|
+            p_offset = j * (girder_len.to_f / num_post_spaces)
+            px = 0
+            py = 0
+            
+            if is_span_y
+              px = bx + p_offset
+              py = by + offset
+            else
+              px = bx + offset
+              py = by + p_offset
+            end
+            
+            if j == 0 || j == num_post_spaces
+              # Check if this endpoint is on an interior boundary line (pocket beam connection)
+              on_boundary = is_point_on_boundary.call(px, py)
+              
+              if on_boundary
+                br_mat = get_material.call("Simpson Galvanized Steel", "#a1a1aa")
+                br_name = "Simpson Girder Wood Hanger"
+              else
+                br_mat = get_material.call("Simpson Hanger Steel", "#64748b")
+                br_name = "Simpson Girder Hanger"
+              end
+              
+              if j == 0
+                if is_span_y
+                  draw_box.call(bracket_group.entities, bx, py - (beam_w + 1.5) / 2.0, beam_z - 0.25, 2.0, beam_w + 1.5, beam_d + 0.25, br_name, br_mat)
+                else
+                  draw_box.call(bracket_group.entities, px - (beam_w + 1.5) / 2.0, by, beam_z - 0.25, beam_w + 1.5, 2.0, beam_d + 0.25, br_name, br_mat)
+                end
+              else
+                if is_span_y
+                  draw_box.call(bracket_group.entities, bx + bw_beam - 2.0, py - (beam_w + 1.5) / 2.0, beam_z - 0.25, 2.0, beam_w + 1.5, beam_d + 0.25, br_name, br_mat)
+                else
+                  draw_box.call(bracket_group.entities, px - (beam_w + 1.5) / 2.0, by + bd_beam - 2.0, beam_z - 0.25, beam_w + 1.5, 2.0, beam_d + 0.25, br_name, br_mat)
+                end
+              end
+            else
+              # Draw intermediate support posts and piers
+              # soil_z is the crawlspace ground surface, which sits below the floor system bottom by the stem wall height.
+              soil_z = j_z - stem_wall_height
+              
+              # reveal_in is the height the pier extends above the soil (normally 6 inches)
+              reveal_in = 6.0
+              
+              # The top of the pier should be reveal_in above soil, but capped at the bottom of the beam
+              pier_top_z = [beam_z, soil_z + reveal_in].min
+              
+              # The wood post runs from the top of the pier to the bottom of the beam
+              post_h = [0.0, beam_z - pier_top_z].max
+              
+              # The bottom of the pier goes down to the frost depth below the soil
+              pier_bottom_z = soil_z - depth_in
+              
+              # The total height of the pier is the distance from its bottom to its top
+              pier_h = pier_top_z - pier_bottom_z
+              
+              # The Z coordinate where the pier starts drawing (bottom of the pier)
+              pier_z = pier_bottom_z
+              
+              if post_h > 0.01
+                # Draw the wood support post starting at the top of the concrete pier
+                draw_box.call(post_group.entities, px - post_dim / 2.0, py - post_dim / 2.0, pier_top_z, post_dim, post_dim, post_h, "Support Post")
+              end
+              
+              # Draw the concrete footing pier starting at the bottom of the pier
+              if is_round
+                draw_cylinder.call(pier_group.entities, px, py, pier_z, pier_dia / 2.0, pier_h, "Concrete Pier")
+              else
+                draw_box.call(pier_group.entities, px - pier_sq / 2.0, py - pier_sq / 2.0, pier_z, pier_sq, pier_sq, pier_h, "Concrete Pier")
+              end
+            end
+          end
+        end
+      end
+    end
+
     apply_bim_data.call(fl_group, "Floor")
   }
 
@@ -1274,14 +1735,95 @@ begin
       ]
       draw_foundation.call(f_pts)
     elsif foundation_shape == 'custom'
-      combined_blocks.each do |block|
-        f_pts = [
-          [block[:x], block[:y], 0],
-          [block[:x] + block[:w], block[:y], 0],
-          [block[:x] + block[:w], block[:y] + block[:h], 0],
-          [block[:x], block[:y] + block[:h], 0]
-        ]
-        draw_foundation.call(f_pts)
+      if combined_blocks.length > 0
+        combined_blocks.each do |block|
+          f_pts = [
+            [block[:x], block[:y], 0],
+            [block[:x] + block[:w], block[:y], 0],
+            [block[:x] + block[:w], block[:y] + block[:h], 0],
+            [block[:x], block[:y] + block[:h], 0]
+          ]
+          draw_foundation.call(f_pts)
+        end
+      elsif custom_exterior_walls.length > 0
+        # Derive slab footprint from exterior walls using grid-fill
+        wall_rects = custom_exterior_walls.map do |w|
+          wx = w[:x_in].to_f
+          wz = w[:y_in].to_f
+          wlen = w[:length_in].to_f
+          is_h = w[:orientation] == 'horizontal'
+          rw = is_h ? wlen : w[:thickness_in].to_f
+          rd = is_h ? w[:thickness_in].to_f : wlen
+          if rw < 0
+            wx += rw
+            rw = rw.abs
+          end
+          if rd < 0
+            wz += rd
+            rd = rd.abs
+          end
+          {x: wx, z: wz, w: rw, d: rd}
+        end
+        
+        xs = wall_rects.flat_map { |r| [r[:x], r[:x] + r[:w]] }.uniq.sort
+        zs = wall_rects.flat_map { |r| [r[:z], r[:z] + r[:d]] }.uniq.sort
+        
+        if xs.length >= 2 && zs.length >= 2
+          grid = Array.new(xs.length - 1) { Array.new(zs.length - 1, false) }
+          
+          (xs.length - 1).times do |i|
+            (zs.length - 1).times do |j|
+              cx = (xs[i] + xs[i + 1]) / 2.0
+              cz = (zs[j] + zs[j + 1]) / 2.0
+              grid[i][j] = wall_rects.any? { |r| cx >= r[:x] && cx <= r[:x] + r[:w] && cz >= r[:z] && cz <= r[:z] + r[:d] }
+            end
+          end
+          
+          # Fill horizontally between walls
+          (zs.length - 1).times do |j|
+            left = -1
+            (xs.length - 1).times do |i|
+              if grid[i][j]
+                if left >= 0
+                  (left..i).each { |k| grid[k][j] = true }
+                end
+                left = i
+              end
+            end
+          end
+          
+          # Fill vertically between walls
+          (xs.length - 1).times do |i|
+            top = -1
+            (zs.length - 1).times do |j|
+              if grid[i][j]
+                if top >= 0
+                  (top..j).each { |k| grid[i][k] = true }
+                end
+                top = j
+              end
+            end
+          end
+          
+          # Create slab for each filled cell
+          (xs.length - 1).times do |i|
+            (zs.length - 1).times do |j|
+              if grid[i][j]
+                cw = xs[i + 1] - xs[i]
+                cd = zs[j + 1] - zs[j]
+                if cw > 0.01 && cd > 0.01
+                  f_pts = [
+                    [xs[i], zs[j], 0],
+                    [xs[i] + cw, zs[j], 0],
+                    [xs[i] + cw, zs[j] + cd, 0],
+                    [xs[i], zs[j] + cd, 0]
+                  ]
+                  draw_foundation.call(f_pts)
+                end
+              end
+            end
+          end
+        end
       end
     end
   end
@@ -1317,14 +1859,67 @@ begin
       ]
       draw_floor_framing.call(f_pts)
     elsif shape == 'custom'
-      combined_blocks.each do |block|
-        f_pts = [
-          [block[:x], block[:y], 0],
-          [block[:x] + block[:w], block[:y], 0],
-          [block[:x] + block[:w], block[:y] + block[:h], 0],
-          [block[:x], block[:y] + block[:h], 0]
-        ]
-        draw_floor_framing.call(f_pts)
+      if combined_blocks.length > 0
+        combined_blocks.each do |block|
+          f_pts = [
+            [block[:x], block[:y], 0],
+            [block[:x] + block[:w], block[:y], 0],
+            [block[:x] + block[:w], block[:y] + block[:h], 0],
+            [block[:x], block[:y] + block[:h], 0]
+          ]
+          draw_floor_framing.call(f_pts)
+        end
+      elsif custom_exterior_walls.length > 0
+        # Derive floor footprint from exterior walls using grid-fill
+        wall_rects = custom_exterior_walls.map do |w|
+          wx = w[:x_in].to_f
+          wz = w[:y_in].to_f
+          wlen = w[:length_in].to_f
+          is_h = w[:orientation] == 'horizontal'
+          rw = is_h ? wlen : w[:thickness_in].to_f
+          rd = is_h ? w[:thickness_in].to_f : wlen
+          if rw < 0; wx += rw; rw = rw.abs; end
+          if rd < 0; wz += rd; rd = rd.abs; end
+          {x: wx, z: wz, w: rw, d: rd}
+        end
+        
+        xs = wall_rects.flat_map { |r| [r[:x], r[:x] + r[:w]] }.uniq.sort
+        zs = wall_rects.flat_map { |r| [r[:z], r[:z] + r[:d]] }.uniq.sort
+        
+        if xs.length >= 2 && zs.length >= 2
+          grid = Array.new(xs.length - 1) { Array.new(zs.length - 1, false) }
+          (xs.length - 1).times do |i|
+            (zs.length - 1).times do |j|
+              cx = (xs[i] + xs[i + 1]) / 2.0
+              cz = (zs[j] + zs[j + 1]) / 2.0
+              grid[i][j] = wall_rects.any? { |r| cx >= r[:x] && cx <= r[:x] + r[:w] && cz >= r[:z] && cz <= r[:z] + r[:d] }
+            end
+          end
+          (zs.length - 1).times do |j|
+            left = -1
+            (xs.length - 1).times do |i|
+              if grid[i][j]; if left >= 0; (left..i).each { |k| grid[k][j] = true }; end; left = i; end
+            end
+          end
+          (xs.length - 1).times do |i|
+            top = -1
+            (zs.length - 1).times do |j|
+              if grid[i][j]; if top >= 0; (top..j).each { |k| grid[i][k] = true }; end; top = j; end
+            end
+          end
+          (xs.length - 1).times do |i|
+            (zs.length - 1).times do |j|
+              if grid[i][j]
+                cw = xs[i + 1] - xs[i]
+                cd = zs[j + 1] - zs[j]
+                if cw > 0.01 && cd > 0.01
+                  f_pts = [[xs[i], zs[j], 0], [xs[i] + cw, zs[j], 0], [xs[i] + cw, zs[j] + cd, 0], [xs[i], zs[j] + cd, 0]]
+                  draw_floor_framing.call(f_pts)
+                end
+              end
+            end
+          end
+        end
       end
     end
   end
@@ -1592,12 +2187,14 @@ ${customTrussScriptContent ? customTrussScriptContent : `
             ridge_r = [ridge_rx, ridge_ry, y + shell_height]
             
             begin
-              # Front slope (NW -> NE -> ridge)
+              # Front slope
               g.entities.add_face(ov_nw, ov_ne, ridge_r, ridge_l) rescue nil
-              # Back slope (SE -> SW -> ridge)
+              # Back slope
               g.entities.add_face(ov_se, ov_sw, ridge_l, ridge_r) rescue nil
-              # Front end gable (NW -> NE triangle)
-              g.entities.add_face(ov_nw, ov_ne, ridge_r, ridge_l) rescue nil
+              # Left gable end triangle (NW -> SW -> ridge_l)
+              g.entities.add_face(ov_nw, ov_sw, ridge_l) rescue nil
+              # Right gable end triangle (NE -> SE -> ridge_r)
+              g.entities.add_face(ov_ne, ov_se, ridge_r) rescue nil
               # Bottom
               g.entities.add_face(ov_nw, ov_ne, ov_se, ov_sw) rescue nil
             rescue => e
