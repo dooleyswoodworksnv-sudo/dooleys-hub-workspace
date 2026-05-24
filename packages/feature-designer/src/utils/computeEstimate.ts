@@ -26,41 +26,50 @@ export function computeEstimate(
   getWallLength: (wallId: number) => number,
   getAvailableWallOptions: { id: number; label: string }[]
 ): EstimateResult {
+  const mockState = {
+    shape: state.shape,
+    widthFt: state.widthFt,
+    widthInches: state.widthInches,
+    lengthFt: state.lengthFt,
+    lengthInches: state.lengthInches,
+    lRightDepthFt: state.lRightDepthFt,
+    lRightDepthInches: state.lRightDepthInches,
+    lBackWidthFt: state.lBackWidthFt,
+    lBackWidthInches: state.lBackWidthInches,
+    lDirection: state.lDirection || 'back-right',
+    uWalls: state.uWalls,
+    uWallsInches: state.uWallsInches,
+    uDirection: state.uDirection || 'back',
+    hLeftBarWidthFt: state.hLeftBarWidthFt,
+    hLeftBarWidthInches: state.hLeftBarWidthInches,
+    hRightBarWidthFt: state.hRightBarWidthFt,
+    hRightBarWidthInches: state.hRightBarWidthInches,
+    hMiddleBarHeightFt: state.hMiddleBarHeightFt,
+    hMiddleBarHeightInches: state.hMiddleBarHeightInches,
+    hMiddleBarOffsetFt: state.hMiddleBarOffsetFt,
+    hMiddleBarOffsetInches: state.hMiddleBarOffsetInches,
+    tTopWidthFt: state.tTopWidthFt,
+    tTopWidthInches: state.tTopWidthInches,
+    tTopLengthFt: state.tTopLengthFt,
+    tTopLengthInches: state.tTopLengthInches,
+    tStemWidthFt: state.tStemWidthFt,
+    tStemWidthInches: state.tStemWidthInches,
+    tStemLengthFt: state.tStemLengthFt,
+    tStemLengthInches: state.tStemLengthInches,
+    combinedBlocks: state.combinedBlocks,
+    shapeBlocks: state.shapeBlocks,
+  } as any;
+
+  const activeBays = state.floorBays && state.floorBays.length > 0 ? state.floorBays : detectBays(mockState);
+
   let extWallLengthIn = 0;
 
   const w = state.widthFt * 12 + state.widthInches;
   const l = state.lengthFt * 12 + state.lengthInches;
 
-  // For custom shapes, compute bounding dimensions from exterior walls
-  let customW = w;
-  let customL = l;
-
   if (state.shape === 'custom') {
     // Use Math.abs() because wall lengths can be negative (indicating direction)
     state.exteriorWalls.forEach(wall => extWallLengthIn += Math.abs(wall.lengthFt * 12 + wall.lengthInches));
-
-    // Compute bounding box from exterior walls for area calculations
-    if (state.exteriorWalls.length > 0) {
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      state.exteriorWalls.forEach(wall => {
-        const wx = wall.xFt * 12 + wall.xInches;
-        const wy = wall.yFt * 12 + wall.yInches;
-        const wlen = wall.lengthFt * 12 + wall.lengthInches;
-        if (wall.orientation === 'horizontal') {
-          minX = Math.min(minX, wx, wx + wlen);
-          maxX = Math.max(maxX, wx, wx + wlen);
-          minY = Math.min(minY, wy);
-          maxY = Math.max(maxY, wy);
-        } else {
-          minX = Math.min(minX, wx);
-          maxX = Math.max(maxX, wx);
-          minY = Math.min(minY, wy, wy + wlen);
-          maxY = Math.max(maxY, wy, wy + wlen);
-        }
-      });
-      customW = Math.max(1, maxX - minX);
-      customL = Math.max(1, maxY - minY);
-    }
   } else if (state.shape === 'u-shape') {
     const w1 = state.uWalls.w1 * 12 + state.uWallsInches.w1;
     const w2 = state.uWalls.w2 * 12 + state.uWallsInches.w2;
@@ -78,9 +87,6 @@ export function computeEstimate(
     extWallLengthIn = (w + l) * 2;
   }
 
-  // Effective width/length for area-based calculations
-  const effectiveW = state.shape === 'custom' ? customW : w;
-  const effectiveL = state.shape === 'custom' ? customL : l;
 
   let totalWallLengthIn = extWallLengthIn;
   state.interiorWalls.forEach(wall => totalWallLengthIn += Math.abs(wall.lengthFt * 12 + wall.lengthInches));
@@ -108,45 +114,31 @@ export function computeEstimate(
   // Insulation
   const insulationRolls = (state.addInsulation || state.solidWallsOnly || state.noFramingFloorOnly) ? Math.ceil(extWallAreaSqFt / 40) : 0;
 
-  // Foundation Concrete — varies by type and dimensions
-  let concreteCy = 0;
-  if (state.foundationType !== 'none') {
-    // Floor area in square feet
-    let areaSqFt = effectiveW * effectiveL / 144;
-    if (state.shape === 'l-shape') {
-      const l1 = state.lRightDepthFt * 12 + state.lRightDepthInches;
-      const w2 = state.lBackWidthFt * 12 + state.lBackWidthInches;
-      areaSqFt = (w * l1 + w2 * (l - l1)) / 144;
-    }
+  // Foundation Concrete — varies by type and dimensions per-bay
+  let concreteCuFt = 0;
+  activeBays.forEach(bay => {
+    const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : state.foundationType;
+    if (bayFoundation === 'none') return;
 
-    // Perimeter in feet (for stem walls, footings, thickened edges)
-    const perimeterFt = extWallLengthIn / 12;
+    const areaSqFt = (bay.width * bay.height) / 144;
+    const perimeterFt = 2 * (bay.width + bay.height) / 12;
 
-    if (state.foundationType === 'slab') {
-      // Simple flat slab — area × slab thickness
+    if (bayFoundation === 'slab') {
+      concreteCuFt += areaSqFt * (state.slabThicknessIn / 12);
+    } else if (bayFoundation === 'slab-on-grade') {
       const slabCuFt = areaSqFt * (state.slabThicknessIn / 12);
-      concreteCy = slabCuFt / 27;
-
-    } else if (state.foundationType === 'slab-on-grade') {
-      // Slab-on-grade: flat slab + thickened perimeter edge
-      const slabCuFt = areaSqFt * (state.slabThicknessIn / 12);
-      // Thickened edge: perimeter × edge depth × edge width (use footing width for edge width)
       const edgeWidthFt = state.footingWidthIn / 12;
       const edgeExtraDepthFt = (state.thickenedEdgeDepthIn - state.slabThicknessIn) / 12;
       const edgeCuFt = edgeExtraDepthFt > 0 ? perimeterFt * edgeWidthFt * edgeExtraDepthFt : 0;
-      concreteCy = (slabCuFt + edgeCuFt) / 27;
-
-    } else if (state.foundationType === 'stem-wall') {
-      // Stem wall: vertical walls + continuous footing + optional interior slab
-      // Stem wall volume: perimeter × height × thickness
+      concreteCuFt += slabCuFt + edgeCuFt;
+    } else if (bayFoundation === 'stem-wall') {
       const stemWallCuFt = perimeterFt * (state.stemWallHeightIn / 12) * (state.stemWallThicknessIn / 12);
-      // Footing volume: perimeter × footing width × footing thickness
       const footingCuFt = perimeterFt * (state.footingWidthIn / 12) * (state.footingThicknessIn / 12);
-      // Interior slab (if present): area × slab thickness
       const slabCuFt = areaSqFt * (state.slabThicknessIn / 12);
-      concreteCy = (stemWallCuFt + footingCuFt + slabCuFt) / 27;
+      concreteCuFt += stemWallCuFt + footingCuFt + slabCuFt;
     }
-  }
+  });
+  let concreteCy = concreteCuFt / 27;
 
   // Floor Joists — length-aware, size-aware pricing
   const joistPerLFMap: Record<string, keyof MaterialCosts> = {
@@ -182,15 +174,23 @@ export function computeEstimate(
   let pierVolumeCuFt = 0;
 
   if (state.addFloorFraming || state.noFramingFloorOnly) {
-    if (state.floorBays && state.floorBays.length > 0) {
-      let totalJoists = 0;
-      let totalLF = 0;
-      let totalAreaSqFt = 0;
+    let totalJoists = 0;
+    let totalLF = 0;
+    let totalAreaSqFt = 0;
+    let totalArea = 0;
+    let framedArea = 0;
 
-      state.floorBays.forEach(bay => {
+    activeBays.forEach(bay => {
+      const area = (bay.width * bay.height) / 144;
+      totalArea += area;
+      const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : state.foundationType;
+      
+      if (bayFoundation !== 'slab' && bayFoundation !== 'slab-on-grade' && bayFoundation !== 'none') {
+        framedArea += area;
+
         const bw = bay.width;
         const bh = bay.height;
-        const dir = bay.joistDirection;
+        const dir = bay.joistDirection || state.joistDirection;
 
         const distributionIn = dir === 'y' ? bw : bh;
         const perpIn = dir === 'y' ? bh : bw;
@@ -200,67 +200,22 @@ export function computeEstimate(
         
         totalJoists += count;
         totalLF += Math.round(count * lenFt);
-        totalAreaSqFt += (bw * bh) / 144;
-      });
+        totalAreaSqFt += area;
+      }
+    });
 
-      floorJoists = totalJoists;
-      joistTotalLF = totalLF;
-      rimJoistLF = Math.round(extWallLengthIn / 12);
-      joistLengthFt = totalJoists > 0 ? Math.round((totalLF / totalJoists) * 10) / 10 : 0;
-      subfloorSheets = (state.addSubfloor || state.noFramingFloorOnly) ? Math.ceil(totalAreaSqFt / 32) : 0;
-    } else {
-      const areaSqFt = effectiveW * effectiveL / 144;
-      const distributionIn = state.joistDirection === 'y' ? effectiveL : effectiveW;
-      const perpIn = state.joistDirection === 'y' ? effectiveW : effectiveL;
-
-      floorJoists = Math.ceil(distributionIn / state.joistSpacing);
-      joistLengthFt = Math.round(perpIn / 12 * 10) / 10;
-      joistTotalLF = Math.round(floorJoists * joistLengthFt);
-      subfloorSheets = (state.addSubfloor || state.noFramingFloorOnly) ? Math.ceil(areaSqFt / 32) : 0;
-    }
+    floorJoists = totalJoists;
+    joistTotalLF = totalLF;
+    const framedRatio = totalArea > 0 ? framedArea / totalArea : 1;
+    rimJoistLF = Math.round((extWallLengthIn / 12) * framedRatio);
+    joistLengthFt = totalJoists > 0 ? Math.round((totalLF / totalJoists) * 10) / 10 : 0;
+    subfloorSheets = (state.addSubfloor || state.noFramingFloorOnly) ? Math.ceil(totalAreaSqFt / 32) : 0;
 
     // --- Floor Girder Support System Quantities ---
     if (state.addFloorFraming && state.enableGirderSystem) {
       const fHeight = state.foundationType === 'none' ? 0 
         : (state.foundationType === 'slab' || state.foundationType === 'slab-on-grade') ? state.slabThicknessIn 
         : state.stemWallHeightIn;
-
-      // Generate active bays
-      const mockState = {
-        shape: state.shape,
-        widthFt: state.widthFt,
-        widthInches: state.widthInches,
-        lengthFt: state.lengthFt,
-        lengthInches: state.lengthInches,
-        lRightDepthFt: state.lRightDepthFt,
-        lRightDepthInches: state.lRightDepthInches,
-        lBackWidthFt: state.lBackWidthFt,
-        lBackWidthInches: state.lBackWidthInches,
-        lDirection: state.lDirection,
-        uWalls: state.uWalls,
-        uWallsInches: state.uWallsInches,
-        uDirection: state.uDirection,
-        hLeftBarWidthFt: state.hLeftBarWidthFt,
-        hLeftBarWidthInches: state.hLeftBarWidthInches,
-        hRightBarWidthFt: state.hRightBarWidthFt,
-        hRightBarWidthInches: state.hRightBarWidthInches,
-        hMiddleBarHeightFt: state.hMiddleBarHeightFt,
-        hMiddleBarHeightInches: state.hMiddleBarHeightInches,
-        hMiddleBarOffsetFt: state.hMiddleBarOffsetFt,
-        hMiddleBarOffsetInches: state.hMiddleBarOffsetInches,
-        tTopWidthFt: state.tTopWidthFt,
-        tTopWidthInches: state.tTopWidthInches,
-        tTopLengthFt: state.tTopLengthFt,
-        tTopLengthInches: state.tTopLengthInches,
-        tStemWidthFt: state.tStemWidthFt,
-        tStemWidthInches: state.tStemWidthInches,
-        tStemLengthFt: state.tStemLengthFt,
-        tStemLengthInches: state.tStemLengthInches,
-        combinedBlocks: state.combinedBlocks,
-        shapeBlocks: state.shapeBlocks,
-      } as any;
-
-      const activeBays = state.floorBays && state.floorBays.length > 0 ? state.floorBays : detectBays(mockState);
 
       let beamPlies = 3;
       let beamDepthIn = 9.25;
@@ -293,7 +248,7 @@ export function computeEstimate(
 
       const parsedBays = activeBays.map(bay => {
         const direction = state.floorBays && state.floorBays.length > 0 ? bay.joistDirection : state.joistDirection;
-        return { ...bay, joistDirection: direction };
+        return { ...bay, joistDirection: direction, foundationType: bay.foundationType };
       });
 
       const supportSystem = computeFramingSupportSystem(state, parsedBays);
@@ -335,51 +290,38 @@ export function computeEstimate(
   }
 
   // Hardware, Wraps, Foundation Accessories
-  // Rebar — varies by foundation type (all as 20' sticks)
+  // Rebar — varies by foundation type per bay (all as 20' sticks)
   let rebarSticks = 0;
   if (state.foundationType !== 'none') {
-    const perimeterFt = extWallLengthIn / 12;
+    let rebarTotalLF = 0;
+    activeBays.forEach(bay => {
+      const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : state.foundationType;
+      if (bayFoundation === 'none') return;
 
-    if (state.foundationType === 'slab') {
-      // Slab mesh: #4 rebar @ 24" OC both directions across the slab
-      const widthFt = effectiveW / 12;
-      const lengthFt = effectiveL / 12;
-      const barsAlongWidth = Math.ceil(lengthFt * 12 / 24);   // bars running width-wise
-      const barsAlongLength = Math.ceil(widthFt * 12 / 24);    // bars running length-wise
-      const meshLF = (barsAlongWidth * widthFt) + (barsAlongLength * lengthFt);
-      // Plus 2 perimeter bars around the slab edge
-      const perimeterLF = perimeterFt * 2;
-      rebarSticks = Math.ceil((meshLF + perimeterLF) / 20);
+      const perimeterFt = 2 * (bay.width + bay.height) / 12;
+      const widthFt = bay.width / 12;
+      const lengthFt = bay.height / 12;
 
-    } else if (state.foundationType === 'slab-on-grade') {
-      // Slab mesh (same as slab)
-      const widthFt = effectiveW / 12;
-      const lengthFt = effectiveL / 12;
-      const barsAlongWidth = Math.ceil(lengthFt * 12 / 24);
-      const barsAlongLength = Math.ceil(widthFt * 12 / 24);
-      const meshLF = (barsAlongWidth * widthFt) + (barsAlongLength * lengthFt);
-      // Thickened edge: 2 continuous horizontal bars in the thickened perimeter
-      const edgeLF = perimeterFt * 2;
-      rebarSticks = Math.ceil((meshLF + edgeLF) / 20);
-
-    } else if (state.foundationType === 'stem-wall') {
-      // Footing: 2-3 continuous horizontal bars
-      const footingLF = perimeterFt * 3;
-      // Stem wall vertical dowels: every 48" OC around the perimeter
-      const verticalDowels = Math.ceil(perimeterFt * 12 / 48);
-      const dowelLengthFt = (state.stemWallHeightIn + state.footingThicknessIn + 12) / 12; // extends into footing + 12" lap
-      const verticalLF = verticalDowels * dowelLengthFt;
-      // Stem wall horizontal bars: 1 course every 24" of wall height (min 2: top & bottom)
-      const horizCourses = Math.max(2, Math.ceil(state.stemWallHeightIn / 24));
-      const horizLF = horizCourses * perimeterFt;
-      // Optional interior slab mesh
-      const widthFt = effectiveW / 12;
-      const lengthFt = effectiveL / 12;
-      const barsAlongWidth = Math.ceil(lengthFt * 12 / 24);
-      const barsAlongLength = Math.ceil(widthFt * 12 / 24);
-      const meshLF = (barsAlongWidth * widthFt) + (barsAlongLength * lengthFt);
-      rebarSticks = Math.ceil((footingLF + verticalLF + horizLF + meshLF) / 20);
-    }
+      if (bayFoundation === 'slab' || bayFoundation === 'slab-on-grade') {
+        const barsAlongWidth = Math.ceil(bay.height / 24);
+        const barsAlongLength = Math.ceil(bay.width / 24);
+        const meshLF = (barsAlongWidth * widthFt) + (barsAlongLength * lengthFt);
+        const perimeterLF = perimeterFt * 2;
+        rebarTotalLF += meshLF + perimeterLF;
+      } else if (bayFoundation === 'stem-wall') {
+        const footingLF = perimeterFt * 3;
+        const verticalDowels = Math.ceil(perimeterFt * 12 / 48);
+        const dowelLengthFt = (state.stemWallHeightIn + state.footingThicknessIn + 12) / 12;
+        const verticalLF = verticalDowels * dowelLengthFt;
+        const horizCourses = Math.max(2, Math.ceil(state.stemWallHeightIn / 24));
+        const horizLF = horizCourses * perimeterFt;
+        const barsAlongWidth = Math.ceil(bay.height / 24);
+        const barsAlongLength = Math.ceil(bay.width / 24);
+        const meshLF = (barsAlongWidth * widthFt) + (barsAlongLength * lengthFt);
+        rebarTotalLF += footingLF + verticalLF + horizLF + meshLF;
+      }
+    });
+    rebarSticks = Math.ceil(rebarTotalLF / 20);
   }
 
   // Anchor bolts — for attaching sill plate to foundation

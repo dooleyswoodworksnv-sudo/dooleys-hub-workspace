@@ -49,6 +49,7 @@ interface Preview2DProps {
   girderPierSize?: '12" Round' | '16" Square';
   addPocketBeams?: boolean;
   pocketBeamsOnlyAtGirderEnds?: boolean;
+  foundationType?: 'none' | 'slab' | 'slab-on-grade' | 'stem-wall';
   // PDF Reference
   pdfImages: string[];
   selectedPdfIndex: number;
@@ -205,6 +206,7 @@ export default function Preview2D({
   interiorWalls, exteriorWalls, doors, windows, bumpouts, updateInteriorWallFields, updateExteriorWallFields, updateDoorFields, updateWindowFields, updateBumpoutFields, getSnapPoints,
   addFloorFraming, joistSpacing, joistSize, joistDirection, floorBays = [], addSubfloor, subfloorThickness, subfloorMaterial,
   enableGirderSystem = false,
+  foundationType = 'stem-wall',
   girderSpanThresholdFt = 12,
   girderPostSpacingFt = 8,
   girderSize = '3-2x10',
@@ -2779,50 +2781,88 @@ export default function Preview2D({
               <g className="floor-joists" opacity="0.3">
                 {floorBays && floorBays.length > 0 ? (
                   <>
-                    {floorBays.map((bay) => (
-                      <g key={bay.id}>
-                        {/* Bay boundary */}
-                        <rect
-                          x={bay.x} y={bay.y} width={bay.width} height={bay.height}
-                          fill="none" stroke="#6366f1" strokeWidth="1" strokeDasharray="6 3" opacity="0.4"
-                        />
-                        {/* Bay label */}
-                        <text
-                          x={bay.x + bay.width / 2} y={bay.y + bay.height / 2}
-                          textAnchor="middle" dominantBaseline="central"
-                          fill="#6366f1" fontSize="10" fontWeight="bold" opacity="0.5"
-                        >
-                          {bay.label}
-                        </text>
-                        {bay.joistDirection === 'y' ? (
-                          <>
-                            {/* Rim joists front/back */}
-                            <rect x={bay.x} y={bay.y} width={bay.width} height={1.5} fill="#52525b" />
-                            <rect x={bay.x} y={bay.y + bay.height - 1.5} width={bay.width} height={1.5} fill="#52525b" />
-                            {/* Joists spaced along X */}
-                            {Array.from({ length: Math.ceil(bay.width / joistSpacing) + 1 }).map((_, i) => {
-                              let jx = bay.x + i * joistSpacing;
-                              if (jx + 1.5 > bay.x + bay.width) jx = bay.x + bay.width - 1.5;
-                              if (jx < bay.x) jx = bay.x;
-                              return <rect key={`j-${bay.id}-${i}`} x={jx} y={bay.y + 1.5} width={1.5} height={bay.height - 3} fill="#71717a" />;
-                            })}
-                          </>
-                        ) : (
-                          <>
-                            {/* Rim joists left/right */}
-                            <rect x={bay.x} y={bay.y} width={1.5} height={bay.height} fill="#52525b" />
-                            <rect x={bay.x + bay.width - 1.5} y={bay.y} width={1.5} height={bay.height} fill="#52525b" />
-                            {/* Joists spaced along Z */}
-                            {Array.from({ length: Math.ceil(bay.height / joistSpacing) + 1 }).map((_, i) => {
-                              let jy = bay.y + i * joistSpacing;
-                              if (jy + 1.5 > bay.y + bay.height) jy = bay.y + bay.height - 1.5;
-                              if (jy < bay.y) jy = bay.y;
-                              return <rect key={`j-${bay.id}-${i}`} x={bay.x + 1.5} y={jy} width={bay.width - 3} height={1.5} fill="#71717a" />;
-                            })}
-                          </>
-                        )}
-                      </g>
-                    ))}
+                    {floorBays.map((bay) => {
+                      const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : foundationType;
+                      if (bayFoundation === 'slab' || bayFoundation === 'slab-on-grade' || bayFoundation === 'none') {
+                        let labelSuffix = 'Slab';
+                        if (bayFoundation === 'slab-on-grade') labelSuffix = 'Slab on Grade';
+                        if (bayFoundation === 'none') labelSuffix = 'No Foundation';
+                        
+                        return (
+                          <g key={bay.id}>
+                            {/* Bay boundary with concrete/none pattern fill */}
+                            <rect
+                              x={bay.x} y={bay.y} width={bay.width} height={bay.height}
+                              fill={bayFoundation === 'none' ? "rgba(244, 63, 94, 0.05)" : "rgba(148, 163, 184, 0.15)"} 
+                              stroke={bayFoundation === 'none' ? "#f43f5e" : "#64748b"} 
+                              strokeWidth="1.5" 
+                              strokeDasharray={bayFoundation === 'none' ? "4 4" : "none"}
+                            />
+                            {/* Shading/texture effect */}
+                            {bayFoundation !== 'none' && (
+                              <rect
+                                x={bay.x + 2} y={bay.y + 2} width={bay.width - 4} height={bay.height - 4}
+                                fill="none" stroke="rgba(148, 163, 184, 0.3)" strokeWidth="1" strokeDasharray="3 3"
+                              />
+                            )}
+                            {/* Bay label */}
+                            <text
+                              x={bay.x + bay.width / 2} y={bay.y + bay.height / 2}
+                              textAnchor="middle" dominantBaseline="central"
+                              fill={bayFoundation === 'none' ? "#f43f5e" : "#475569"} 
+                              fontSize="10" fontWeight="bold" opacity="0.8"
+                            >
+                              {bay.label} ({labelSuffix})
+                            </text>
+                          </g>
+                        );
+                      }
+                      
+                      return (
+                        <g key={bay.id}>
+                          {/* Bay boundary */}
+                          <rect
+                            x={bay.x} y={bay.y} width={bay.width} height={bay.height}
+                            fill="none" stroke="#6366f1" strokeWidth="1" strokeDasharray="6 3" opacity="0.4"
+                          />
+                          {/* Bay label */}
+                          <text
+                            x={bay.x + bay.width / 2} y={bay.y + bay.height / 2}
+                            textAnchor="middle" dominantBaseline="central"
+                            fill="#6366f1" fontSize="10" fontWeight="bold" opacity="0.5"
+                          >
+                            {bay.label}
+                          </text>
+                          {bay.joistDirection === 'y' ? (
+                            <>
+                              {/* Rim joists front/back */}
+                              <rect x={bay.x} y={bay.y} width={bay.width} height={1.5} fill="#52525b" />
+                              <rect x={bay.x} y={bay.y + bay.height - 1.5} width={bay.width} height={1.5} fill="#52525b" />
+                              {/* Joists spaced along X */}
+                              {Array.from({ length: Math.ceil(bay.width / joistSpacing) + 1 }).map((_, i) => {
+                                let jx = bay.x + i * joistSpacing;
+                                if (jx + 1.5 > bay.x + bay.width) jx = bay.x + bay.width - 1.5;
+                                if (jx < bay.x) jx = bay.x;
+                                return <rect key={`j-${bay.id}-${i}`} x={jx} y={bay.y + 1.5} width={1.5} height={bay.height - 3} fill="#71717a" />;
+                              })}
+                            </>
+                          ) : (
+                            <>
+                              {/* Rim joists left/right */}
+                              <rect x={bay.x} y={bay.y} width={1.5} height={bay.height} fill="#52525b" />
+                              <rect x={bay.x + bay.width - 1.5} y={bay.y} width={1.5} height={bay.height} fill="#52525b" />
+                              {/* Joists spaced along Z */}
+                              {Array.from({ length: Math.ceil(bay.height / joistSpacing) + 1 }).map((_, i) => {
+                                let jy = bay.y + i * joistSpacing;
+                                if (jy + 1.5 > bay.y + bay.height) jy = bay.y + bay.height - 1.5;
+                                if (jy < bay.y) jy = bay.y;
+                                return <rect key={`j-${bay.id}-${i}`} x={bay.x + 1.5} y={jy} width={bay.width - 3} height={1.5} fill="#71717a" />;
+                              })}
+                            </>
+                          )}
+                        </g>
+                      );
+                    })}
                   </>
                 ) : joistDirection === 'y' ? (
                   <>

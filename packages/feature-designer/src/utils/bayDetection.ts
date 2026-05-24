@@ -20,6 +20,7 @@ export interface FloorBay {
   width: number;
   /** Bay height in inches (Y axis) */
   height: number;
+  foundationType?: 'default' | 'none' | 'slab' | 'slab-on-grade' | 'stem-wall';
 }
 
 /**
@@ -631,6 +632,11 @@ export function computeFramingSupportSystem(state: any, bays: FloorBay[]): Frami
 
   // 3. Generate standard Girders for each bay
   bays.forEach((bay, bIdx) => {
+    const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : state.foundationType;
+    if (bayFoundation === 'slab' || bayFoundation === 'slab-on-grade' || bayFoundation === 'none') {
+      return; // Skip floor girders inside concrete slabs or no-foundation zones
+    }
+
     const isSpanY = bay.joistDirection === 'y';
     const spanIn = isSpanY ? bay.height : bay.width;
     const girderLengthIn = isSpanY ? bay.width : bay.height;

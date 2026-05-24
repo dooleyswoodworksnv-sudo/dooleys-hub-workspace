@@ -5600,37 +5600,57 @@ end
                                   {formatBayDimensions(bay)}
                                 </div>
                               </div>
-                              <div className="flex gap-0.5 bg-zinc-100 dark:bg-[#151a2e]/80 p-0.5 rounded-md border border-zinc-200 dark:border-[#243052]">
-                                <button
-                                  onClick={() => {
+                              <div className="flex items-center gap-1.5">
+                                {/* Foundation Type Dropdown */}
+                                <select
+                                  value={bay.foundationType || 'default'}
+                                  onChange={(e) => {
                                     setFloorBays(prev => prev.map((b, i) =>
-                                      i === idx ? { ...b, joistDirection: 'x' } : b
+                                      i === idx ? { ...b, foundationType: e.target.value as any } : b
                                     ));
                                   }}
-                                  className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${
-                                    bay.joistDirection === 'x'
-                                      ? 'bg-indigo-500 text-white shadow-sm'
-                                      : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
-                                  }`}
-                                  title="Joists span along X axis"
+                                  className="px-1 py-0.5 bg-zinc-100 dark:bg-[#151a2e]/80 border border-zinc-200 dark:border-[#243052] rounded text-[9px] font-semibold text-zinc-600 dark:text-zinc-400 focus:outline-none"
+                                  title="Custom foundation type for this bay"
                                 >
-                                  → X
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setFloorBays(prev => prev.map((b, i) =>
-                                      i === idx ? { ...b, joistDirection: 'y' } : b
-                                    ));
-                                  }}
-                                  className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${
-                                    bay.joistDirection === 'y'
-                                      ? 'bg-indigo-500 text-white shadow-sm'
-                                      : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
-                                  }`}
-                                  title="Joists span along Y axis"
-                                >
-                                  ↓ Y
-                                </button>
+                                  <option value="default">Default</option>
+                                  <option value="stem-wall">Stem Wall</option>
+                                  <option value="slab">Slab</option>
+                                  <option value="slab-on-grade">Slab on Grade</option>
+                                  <option value="none">None</option>
+                                </select>
+
+                                <div className="flex gap-0.5 bg-zinc-100 dark:bg-[#151a2e]/80 p-0.5 rounded-md border border-zinc-200 dark:border-[#243052]">
+                                  <button
+                                    onClick={() => {
+                                      setFloorBays(prev => prev.map((b, i) =>
+                                        i === idx ? { ...b, joistDirection: 'x' } : b
+                                      ));
+                                    }}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${
+                                      bay.joistDirection === 'x'
+                                        ? 'bg-indigo-500 text-white shadow-sm'
+                                        : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
+                                    }`}
+                                    title="Joists span along X axis"
+                                  >
+                                    → X
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setFloorBays(prev => prev.map((b, i) =>
+                                        i === idx ? { ...b, joistDirection: 'y' } : b
+                                      ));
+                                    }}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${
+                                      bay.joistDirection === 'y'
+                                        ? 'bg-indigo-500 text-white shadow-sm'
+                                        : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
+                                    }`}
+                                    title="Joists span along Y axis"
+                                  >
+                                    ↓ Y
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           ))}

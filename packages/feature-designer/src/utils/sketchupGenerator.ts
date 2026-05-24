@@ -79,7 +79,7 @@ export const generateSketchUpCode = (state: AppState, section: GenerationSection
   ).join(",\n");
 
   const floorBaysRuby = (floorBays || []).map(b => 
-    `  { label: '${b.label}', dir: '${b.joistDirection}', x: ${b.x}, y: ${b.y}, w: ${b.width}, h: ${b.height} }`
+    `  { label: '${b.label}', dir: '${b.joistDirection}', x: ${b.x}, y: ${b.y}, w: ${b.width}, h: ${b.height}, foundation_type: '${b.foundationType || 'default'}' }`
   ).join(",\n");
 
   const interiorWallsRuby = interiorWalls.map(w => {
@@ -979,95 +979,149 @@ begin
 
     pts = pts_raw.map { |p| p.is_a?(Geom::Point3d) ? p : Geom::Point3d.new(p[0], p[1], p[2]) }
     
-    if foundation_type == 'slab' || foundation_type == 'slab-on-grade'
-      # Shift slab down by floor_sys_h
-      slab_group = fd_ents.add_group
-      slab_group.name = "Slab"
-      slab_pts = pts.map { |p| Geom::Point3d.new(p.x, p.y, -floor_sys_h) }
-      face = slab_group.entities.add_face(slab_pts)
-      if face
-        face.reverse! if face.normal.z > 0 # Ensure it pushpulls downwards
-        face.pushpull(slab_thickness) # Slab thickness
-      end
+    if floor_bays.length > 0
+      floor_bays.each do |bay|
+        bay_foundation = bay[:foundation_type] && bay[:foundation_type] != 'default' ? bay[:foundation_type] : foundation_type
+        next if bay_foundation == 'none'
 
-      # Draw thickened edge (integral footing) - ONLY for slab-on-grade
-      if foundation_type == 'slab-on-grade'
+        bx = bay[:x].to_f
+        by = bay[:y].to_f
+        bw = bay[:w].to_f
+        bh = bay[:h].to_f
+
+        if bay_foundation == 'slab' || bay_foundation == 'slab-on-grade'
+          slab_group = fd_ents.add_group
+          slab_group.name = "Slab"
+          slab_pts = [
+            Geom::Point3d.new(bx, by, -floor_sys_h),
+            Geom::Point3d.new(bx + bw, by, -floor_sys_h),
+            Geom::Point3d.new(bx + bw, by + bh, -floor_sys_h),
+            Geom::Point3d.new(bx, by + bh, -floor_sys_h)
+          ]
+          face = slab_group.entities.add_face(slab_pts)
+          if face
+            face.reverse! if face.normal.z > 0
+            face.pushpull(slab_thickness)
+          end
+
+          if bay_foundation == 'slab-on-grade'
+            edge_w = 12.0
+            edge_d = thickened_edge_depth - slab_thickness
+            e_z = -floor_sys_h - slab_thickness
+
+            draw_box.call(fd_ents, bx, by, e_z, bw, edge_w, edge_d, "Thickened Edge")
+            draw_box.call(fd_ents, bx, by + bh - edge_w, e_z, bw, edge_w, edge_d, "Thickened Edge")
+            draw_box.call(fd_ents, bx, by + edge_w, e_z, edge_w, bh - 2 * edge_w, edge_d, "Thickened Edge")
+            draw_box.call(fd_ents, bx + bw - edge_w, by + edge_w, e_z, edge_w, bh - 2 * edge_w, edge_d, "Thickened Edge")
+          end
+        elsif bay_foundation == 'stem-wall'
+          f_z = -stem_wall_height - footing_thickness - floor_sys_h
+          offset_out = (footing_width - stem_wall_thickness) / 2.0
+
+          draw_box.call(fd_ents, bx, by, -stem_wall_height - floor_sys_h, bw, stem_wall_thickness, stem_wall_height, "Stem Wall Segment")
+          draw_box.call(fd_ents, bx, by - offset_out, f_z, bw, footing_width, footing_thickness, "Footing Segment")
+
+          draw_box.call(fd_ents, bx, by + bh - stem_wall_thickness, -stem_wall_height - floor_sys_h, bw, stem_wall_thickness, stem_wall_height, "Stem Wall Segment")
+          draw_box.call(fd_ents, bx, by + bh - stem_wall_thickness - offset_out, f_z, bw, footing_width, footing_thickness, "Footing Segment")
+
+          draw_box.call(fd_ents, bx, by + stem_wall_thickness, -stem_wall_height - floor_sys_h, stem_wall_thickness, bh - 2 * stem_wall_thickness, stem_wall_height, "Stem Wall Segment")
+          draw_box.call(fd_ents, bx - offset_out, by + stem_wall_thickness, f_z, footing_width, bh - 2 * stem_wall_thickness, footing_thickness, "Footing Segment")
+
+          draw_box.call(fd_ents, bx + bw - stem_wall_thickness, by + stem_wall_thickness, -stem_wall_height - floor_sys_h, stem_wall_thickness, bh - 2 * stem_wall_thickness, stem_wall_height, "Stem Wall Segment")
+          draw_box.call(fd_ents, bx + bw - stem_wall_thickness - offset_out, by + stem_wall_thickness, f_z, footing_width, bh - 2 * stem_wall_thickness, footing_thickness, "Footing Segment")
+        end
+      end
+    else
+      if foundation_type == 'slab' || foundation_type == 'slab-on-grade'
+        # Shift slab down by floor_sys_h
+        slab_group = fd_ents.add_group
+        slab_group.name = "Slab"
+        slab_pts = pts.map { |p| Geom::Point3d.new(p.x, p.y, -floor_sys_h) }
+        face = slab_group.entities.add_face(slab_pts)
+        if face
+          face.reverse! if face.normal.z > 0 # Ensure it pushpulls downwards
+          face.pushpull(slab_thickness) # Slab thickness
+        end
+
+        # Draw thickened edge (integral footing) - ONLY for slab-on-grade
+        if foundation_type == 'slab-on-grade'
+          pts.each_with_index do |p1, i|
+            p2 = pts[(i + 1) % pts.length]
+            vec = p2 - p1
+            len = vec.length
+            next if len < 0.1
+            
+            dir = vec.normalize
+            perp = Geom::Vector3d.new(-dir.y, dir.x, 0)
+            
+            edge_w = 12.0 # Default thickened edge width
+            edge_d = thickened_edge_depth - slab_thickness
+            
+            eg = fd_ents.add_group
+            eg.name = "Thickened Edge Segment"
+            e_z = -floor_sys_h - slab_thickness
+            
+            e_pts = [
+              [p1.x, p1.y, e_z],
+              [p1.offset(perp, edge_w).x, p1.offset(perp, edge_w).y, e_z],
+              [p2.offset(perp, edge_w).x, p2.offset(perp, edge_w).y, e_z],
+              [p2.x, p2.y, e_z]
+            ]
+            ef = eg.entities.add_face(e_pts)
+            if ef
+              ef.reverse! if ef.normal.z > 0 # Ensure it pushpulls downwards
+              ef.pushpull(edge_d)
+            end
+          end
+        end
+      elsif foundation_type == 'stem-wall'
+        # Draw stem wall and footing for each segment of the perimeter
         pts.each_with_index do |p1, i|
           p2 = pts[(i + 1) % pts.length]
           vec = p2 - p1
           len = vec.length
           next if len < 0.1
           
+          # Direction and perpendicular vectors for offsetting
           dir = vec.normalize
           perp = Geom::Vector3d.new(-dir.y, dir.x, 0)
           
-          edge_w = 12.0 # Default thickened edge width
-          edge_d = thickened_edge_depth - slab_thickness
+          # 1. Footing (drawn from bottom up to stem wall base, centered under stem wall)
+          fg = fd_ents.add_group
+          fg.name = "Footing Segment"
+          f_z = -stem_wall_height - footing_thickness - floor_sys_h
+          # Offset footing outwards so it's centered under the stem wall
+          offset_out = (footing_width - stem_wall_thickness) / 2.0
+          p1_f = p1.offset(perp.reverse, offset_out)
+          p2_f = p2.offset(perp.reverse, offset_out)
           
-          eg = fd_ents.add_group
-          eg.name = "Thickened Edge Segment"
-          e_z = -floor_sys_h - slab_thickness
-          
-          e_pts = [
-            [p1.x, p1.y, e_z],
-            [p1.offset(perp, edge_w).x, p1.offset(perp, edge_w).y, e_z],
-            [p2.offset(perp, edge_w).x, p2.offset(perp, edge_w).y, e_z],
-            [p2.x, p2.y, e_z]
+          f_pts = [
+            [p1_f.x, p1_f.y, f_z],
+            [p1_f.offset(perp, footing_width).x, p1_f.offset(perp, footing_width).y, f_z],
+            [p2_f.offset(perp, footing_width).x, p2_f.offset(perp, footing_width).y, f_z],
+            [p2_f.x, p2_f.y, f_z]
           ]
-          ef = eg.entities.add_face(e_pts)
-          if ef
-            ef.reverse! if ef.normal.z > 0 # Ensure it pushpulls downwards
-            ef.pushpull(edge_d)
+          ff = fg.entities.add_face(f_pts)
+          if ff
+            ff.reverse! if ff.normal.z < 0 # Ensure it pushpulls upwards
+            ff.pushpull(footing_thickness)
           end
-        end
-      end
-    elsif foundation_type == 'stem-wall'
-      # Draw stem wall and footing for each segment of the perimeter
-      pts.each_with_index do |p1, i|
-        p2 = pts[(i + 1) % pts.length]
-        vec = p2 - p1
-        len = vec.length
-        next if len < 0.1
-        
-        # Direction and perpendicular vectors for offsetting
-        dir = vec.normalize
-        perp = Geom::Vector3d.new(-dir.y, dir.x, 0)
-        
-        # 1. Footing (drawn from bottom up to stem wall base, centered under stem wall)
-        fg = fd_ents.add_group
-        fg.name = "Footing Segment"
-        f_z = -stem_wall_height - footing_thickness - floor_sys_h
-        # Offset footing outwards so it's centered under the stem wall
-        offset_out = (footing_width - stem_wall_thickness) / 2.0
-        p1_f = p1.offset(perp.reverse, offset_out)
-        p2_f = p2.offset(perp.reverse, offset_out)
-        
-        f_pts = [
-          [p1_f.x, p1_f.y, f_z],
-          [p1_f.offset(perp, footing_width).x, p1_f.offset(perp, footing_width).y, f_z],
-          [p2_f.offset(perp, footing_width).x, p2_f.offset(perp, footing_width).y, f_z],
-          [p2_f.x, p2_f.y, f_z]
-        ]
-        ff = fg.entities.add_face(f_pts)
-        if ff
-          ff.reverse! if ff.normal.z < 0 # Ensure it pushpulls upwards
-          ff.pushpull(footing_thickness)
-        end
 
-        # 2. Stem Wall (drawn from footing top up to z=0, aligned to exterior perimeter)
-        sg = fd_ents.add_group
-        sg.name = "Stem Wall Segment"
-        s_z = -stem_wall_height - floor_sys_h
-        s_pts = [
-          [p1.x, p1.y, s_z],
-          [p1.offset(perp, stem_wall_thickness).x, p1.offset(perp, stem_wall_thickness).y, s_z],
-          [p2.offset(perp, stem_wall_thickness).x, p2.offset(perp, stem_wall_thickness).y, s_z],
-          [p2.x, p2.y, s_z]
-        ]
-        sf = sg.entities.add_face(s_pts)
-        if sf
-          sf.reverse! if sf.normal.z < 0 # Ensure it pushpulls upwards
-          sf.pushpull(stem_wall_height)
+          # 2. Stem Wall (drawn from footing top up to z=0, aligned to exterior perimeter)
+          sg = fd_ents.add_group
+          sg.name = "Stem Wall Segment"
+          s_z = -stem_wall_height - floor_sys_h
+          s_pts = [
+            [p1.x, p1.y, s_z],
+            [p1.offset(perp, stem_wall_thickness).x, p1.offset(perp, stem_wall_thickness).y, s_z],
+            [p2.offset(perp, stem_wall_thickness).x, p2.offset(perp, stem_wall_thickness).y, s_z],
+            [p2.x, p2.y, s_z]
+          ]
+          sf = sg.entities.add_face(s_pts)
+          if sf
+            sf.reverse! if sf.normal.z < 0 # Ensure it pushpulls upwards
+            sf.pushpull(stem_wall_height)
+          end
         end
       end
     end
@@ -1109,12 +1163,36 @@ begin
       sf_group.name = "Subfloor"
       sf_group.layer = model.layers.add("Subfloor")
       
-      # Subfloor sits just below the floor plane (floor_z is the top of the subfloor)
-      sf_pts = pts.map { |p| Geom::Point3d.new(p.x, p.y, floor_z - subfloor_thickness) }
-      face = sf_group.entities.add_face(sf_pts)
-      if face
-        face.reverse! if face.normal.z < 0
-        face.pushpull(subfloor_thickness)
+      if floor_bays.length > 0 && z_off == 0
+        floor_bays.each do |bay|
+          bay_foundation = bay[:foundation_type] && bay[:foundation_type] != 'default' ? bay[:foundation_type] : foundation_type
+          if bay_foundation != 'slab' && bay_foundation != 'slab-on-grade' && bay_foundation != 'none'
+            bx = bay[:x].to_f
+            by = bay[:y].to_f
+            bw = bay[:w].to_f
+            bh = bay[:h].to_f
+            
+            sf_pts = [
+              Geom::Point3d.new(bx, by, floor_z - subfloor_thickness),
+              Geom::Point3d.new(bx + bw, by, floor_z - subfloor_thickness),
+              Geom::Point3d.new(bx + bw, by + bh, floor_z - subfloor_thickness),
+              Geom::Point3d.new(bx, by + bh, floor_z - subfloor_thickness)
+            ]
+            face = sf_group.entities.add_face(sf_pts)
+            if face
+              face.reverse! if face.normal.z < 0
+              face.pushpull(subfloor_thickness)
+            end
+          end
+        end
+      else
+        # Subfloor sits just below the floor plane (floor_z is the top of the subfloor)
+        sf_pts = pts.map { |p| Geom::Point3d.new(p.x, p.y, floor_z - subfloor_thickness) }
+        face = sf_group.entities.add_face(sf_pts)
+        if face
+          face.reverse! if face.normal.z < 0
+          face.pushpull(subfloor_thickness)
+        end
       end
     end
     
@@ -1139,6 +1217,11 @@ begin
       j_group.material = mat
     elsif floor_bays.length > 0
       floor_bays.each do |bay|
+        bay_foundation = bay[:foundation_type] && bay[:foundation_type] != 'default' ? bay[:foundation_type] : foundation_type
+        if bay_foundation == 'slab' || bay_foundation == 'slab-on-grade' || bay_foundation == 'none'
+          next # Skip floor framing inside concrete slabs or no-foundation zones
+        end
+
         bx = bay[:x].to_f
         by = bay[:y].to_f
         bw = bay[:w].to_f
@@ -1348,7 +1431,11 @@ begin
       # Active bays list
       active_bays = []
       if floor_bays.length > 0
-        active_bays = floor_bays
+        # Only include framed bays for the support system
+        active_bays = floor_bays.select do |bay|
+          bay_foundation = bay[:foundation_type] && bay[:foundation_type] != 'default' ? bay[:foundation_type] : foundation_type
+          bay_foundation != 'slab' && bay_foundation != 'slab-on-grade' && bay_foundation != 'none'
+        end
       else
         # Fallback global bay matching the building boundaries
         active_bays = [{

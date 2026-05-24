@@ -44,7 +44,7 @@ interface Preview3DProps {
   joistSpacing: number;
   joistSize: string;
   joistDirection: 'x' | 'y';
-  floorBays?: { id: string; label: string; joistDirection: 'x' | 'y'; x: number; y: number; width: number; height: number }[];
+  floorBays?: { id: string; label: string; joistDirection: 'x' | 'y'; x: number; y: number; width: number; height: number; foundationType?: 'default' | 'none' | 'slab' | 'slab-on-grade' | 'stem-wall' }[];
   addSubfloor: boolean;
   subfloorThickness: number;
   subfloorMaterial: 'plywood' | 'osb';
@@ -2296,11 +2296,12 @@ export default function Preview3D({
 
   const foundation = useMemo(() => {
     if (currentFloorIndex !== 0) return [];
-    if (foundationType === 'none') return [];
     const parts: { x: number, y: number, z: number, w: number, h: number, d: number, color?: string }[] = [];
 
-    const drawFoundationPart = (start_x: number, start_z: number, length: number, depth: number, is_x_dir: boolean) => {
-      if (foundationType === 'stem-wall') {
+    const drawFoundationPart = (start_x: number, start_z: number, length: number, depth: number, is_x_dir: boolean, typeOverride?: string) => {
+      const activeType = typeOverride || foundationType;
+      if (activeType === 'none') return;
+      if (activeType === 'stem-wall') {
         const sw_z = 0;
         const sw_h = stemWallHeightIn;
         const sw_t = stemWallThicknessIn;
@@ -2322,7 +2323,7 @@ export default function Preview3D({
           const ft_x = start_x + (depth - ft_w) / 2.0;
           parts.push({ x: ft_x, y: ft_z, z: start_z, w: ft_w, h: ft_h, d: length, color: "#71717a" });
         }
-      } else if (foundationType === 'slab' || foundationType === 'slab-on-grade') {
+      } else if (activeType === 'slab' || activeType === 'slab-on-grade') {
         const slab_h = slabThicknessIn;
         const edge_d = thickenedEdgeDepthIn;
         const edge_w = 12; // Default thickened edge width
@@ -2332,14 +2333,14 @@ export default function Preview3D({
           parts.push({ x: start_x, y: 0, z: start_z, w: length, h: slab_h, d: depth, color: "#a1a1aa" });
           
           // Thickened edge (integral footing) - ONLY for slab-on-grade
-          if (foundationType === 'slab-on-grade') {
+          if (activeType === 'slab-on-grade') {
             const edge_y = start_z + (depth - edge_w) / 2.0;
             parts.push({ x: start_x, y: -edge_d + slab_h, z: edge_y, w: length, h: edge_d - slab_h, d: edge_w, color: "#71717a" });
           }
         } else {
           parts.push({ x: start_x, y: 0, z: start_z, w: depth, h: slab_h, d: length, color: "#a1a1aa" });
           
-          if (foundationType === 'slab-on-grade') {
+          if (activeType === 'slab-on-grade') {
             const edge_x = start_x + (depth - edge_w) / 2.0;
             parts.push({ x: edge_x, y: -edge_d + slab_h, z: start_z, w: edge_w, h: edge_d - slab_h, d: length, color: "#71717a" });
           }
@@ -2347,320 +2348,380 @@ export default function Preview3D({
       }
     };
 
-    // Perimeter - ONLY for stem-wall to avoid redundancy with slab
-    const t = thicknessIn;
-    if (foundationType === 'stem-wall') {
-      if (foundationShape === 'rectangle') {
-        drawFoundationPart(0, 0, widthIn, t, true);
-        drawFoundationPart(0, lengthIn - t, widthIn, t, true);
-        drawFoundationPart(0, t, lengthIn - 2 * t, t, false);
-        drawFoundationPart(widthIn - t, t, lengthIn - 2 * t, t, false);
-      } else if (foundationShape === 'l-shape') {
-        drawFoundationPart(0, 0, widthIn, t, true);
-        drawFoundationPart(widthIn - t, t, lRightDepthIn - t, t, false);
-        drawFoundationPart(lBackWidthIn, lRightDepthIn - t, widthIn - lBackWidthIn - t, t, true);
-        drawFoundationPart(lBackWidthIn, lRightDepthIn, lengthIn - lRightDepthIn - t, t, false);
-        drawFoundationPart(0, lengthIn - t, lBackWidthIn + t, t, true);
-        drawFoundationPart(0, t, lengthIn - 2 * t, t, false);
-      } else if (foundationShape === 'u-shape') {
-        drawFoundationPart(0, 0, uWallsIn.w1, t, true);
-        drawFoundationPart(uWallsIn.w1 - t, t, uWallsIn.w2 - t, t, false);
-        drawFoundationPart(uWallsIn.w1 - uWallsIn.w3, uWallsIn.w2 - t, uWallsIn.w3 - t, t, true);
-        drawFoundationPart(uWallsIn.w1 - uWallsIn.w3, uWallsIn.w2 - uWallsIn.w4, uWallsIn.w4 - t, t, false);
-        drawFoundationPart(uWallsIn.w7 - t, uWallsIn.w2 - uWallsIn.w4 - t, uWallsIn.w5 + 2 * t, t, true);
-        drawFoundationPart(uWallsIn.w7 - t, uWallsIn.w8 - uWallsIn.w6, uWallsIn.w6 - t, t, false);
-        drawFoundationPart(0, uWallsIn.w8 - t, uWallsIn.w7, t, true);
-        drawFoundationPart(0, t, uWallsIn.w8 - 2 * t, t, false);
-      } else if (foundationShape === 'h-shape') {
-        drawFoundationPart(0, 0, hLeftBarWidthIn, t, true);
-        drawFoundationPart(hLeftBarWidthIn - t, t, hMiddleBarOffsetIn - t, t, false);
-        drawFoundationPart(hLeftBarWidthIn - t, hMiddleBarOffsetIn + hMiddleBarHeightIn, lengthIn - (hMiddleBarOffsetIn + hMiddleBarHeightIn) - t, t, false);
-        drawFoundationPart(0, lengthIn - t, hLeftBarWidthIn, t, true);
-        drawFoundationPart(0, t, lengthIn - 2 * t, t, false);
-        drawFoundationPart(hLeftBarWidthIn, hMiddleBarOffsetIn, widthIn - hLeftBarWidthIn - hRightBarWidthIn, t, true);
-        drawFoundationPart(hLeftBarWidthIn, hMiddleBarOffsetIn + hMiddleBarHeightIn - t, widthIn - hLeftBarWidthIn - hRightBarWidthIn, t, true);
-        drawFoundationPart(widthIn - hRightBarWidthIn, 0, hRightBarWidthIn, t, true);
-        drawFoundationPart(widthIn - hRightBarWidthIn, t, hMiddleBarOffsetIn - t, t, false);
-        drawFoundationPart(widthIn - hRightBarWidthIn, hMiddleBarOffsetIn + hMiddleBarHeightIn, lengthIn - (hMiddleBarOffsetIn + hMiddleBarHeightIn) - t, t, false);
-        drawFoundationPart(widthIn - hRightBarWidthIn, lengthIn - t, hRightBarWidthIn, t, true);
-        drawFoundationPart(widthIn - t, t, lengthIn - 2 * t, t, false);
-      } else if (foundationShape === 't-shape') {
-        const stemX = (tTopWidthIn - tStemWidthIn) / 2;
-        drawFoundationPart(0, 0, tTopWidthIn, t, true);
-        drawFoundationPart(tTopWidthIn - t, t, tTopLengthIn - 2 * t, t, false);
-        drawFoundationPart(stemX + tStemWidthIn, tTopLengthIn - t, tTopWidthIn - (stemX + tStemWidthIn), t, true);
-        drawFoundationPart(0, tTopLengthIn - t, stemX, t, true);
-        drawFoundationPart(0, t, tTopLengthIn - 2 * t, t, false);
-        drawFoundationPart(stemX, tTopLengthIn, tStemLengthIn - t, t, false);
-        drawFoundationPart(stemX + tStemWidthIn - t, tTopLengthIn, tStemLengthIn - t, t, false);
-        drawFoundationPart(stemX, tTopLengthIn + tStemLengthIn - t, tStemWidthIn, t, true);
-      } else if (foundationShape === 'custom') {
-        const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
-        blocksToUse.forEach(block => {
-          drawFoundationPart(block.x, block.y, block.w, block.h, true);
-        });
-      }
-      
-      // Custom walls foundation
-      exteriorWalls.forEach(wall => {
-        let x = wall.xFt * 12 + wall.xInches;
-        let z = wall.yFt * 12 + wall.yInches;
-        let len = wall.lengthFt * 12 + wall.lengthInches;
-        const isHorizontal = wall.orientation === 'horizontal';
+    if (floorBays && floorBays.length > 0) {
+      floorBays.forEach(bay => {
+        const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : foundationType;
+        if (bayFoundation === 'none') return;
 
-        // Handle negative lengths (same as wall rendering)
-        if (isHorizontal && len < 0) { x += len; len = Math.abs(len); }
-        else if (!isHorizontal && len < 0) { z += len; len = Math.abs(len); }
+        const bx = bay.x;
+        const bz = bay.y;
+        const bw = bay.width;
+        const bh = bay.height;
 
-        // Account for exteriorSide offset (same adjustment as wall rendering)
-        if (isHorizontal && wall.exteriorSide === 1) z -= wall.thicknessIn;
-        else if (!isHorizontal && wall.exteriorSide === 1) x -= wall.thicknessIn;
+        if (bayFoundation === 'slab' || bayFoundation === 'slab-on-grade') {
+          const slab_h = slabThicknessIn;
+          // Main Slab Box
+          parts.push({ x: bx, y: 0, z: bz, w: bw, h: slab_h, d: bh, color: "#a1a1aa" });
 
-        drawFoundationPart(x, z, len, wall.thicknessIn, isHorizontal);
+          if (bayFoundation === 'slab-on-grade') {
+            const edge_d = thickenedEdgeDepthIn;
+            const edge_w = 12;
+            // Add footing edges around the perimeter of this bay
+            parts.push({ x: bx, y: -edge_d + slab_h, z: bz, w: bw, h: edge_d - slab_h, d: edge_w, color: "#71717a" });
+            parts.push({ x: bx, y: -edge_d + slab_h, z: bz + bh - edge_w, w: bw, h: edge_d - slab_h, d: edge_w, color: "#71717a" });
+            parts.push({ x: bx, y: -edge_d + slab_h, z: bz + edge_w, w: edge_w, h: edge_d - slab_h, d: bh - 2 * edge_w, color: "#71717a" });
+            parts.push({ x: bx + bw - edge_w, y: -edge_d + slab_h, z: bz + edge_w, w: edge_w, h: edge_d - slab_h, d: bh - 2 * edge_w, color: "#71717a" });
+          }
+        } else if (bayFoundation === 'stem-wall') {
+          const sw_h = stemWallHeightIn;
+          const sw_t = stemWallThicknessIn;
+          
+          const ft_h = footingThicknessIn;
+          const ft_w = footingWidthIn;
+          const ft_offset = (ft_w - sw_t) / 2;
+
+          // Back Wall (along X, at Z = bz)
+          parts.push({ x: bx, y: 0, z: bz, w: bw, h: sw_h, d: sw_t, color: "#a1a1aa" });
+          parts.push({ x: bx, y: -ft_h, z: bz - ft_offset, w: bw, h: ft_h, d: ft_w, color: "#71717a" });
+
+          // Front Wall (along X, at Z = bz + bh - sw_t)
+          parts.push({ x: bx, y: 0, z: bz + bh - sw_t, w: bw, h: sw_h, d: sw_t, color: "#a1a1aa" });
+          parts.push({ x: bx, y: -ft_h, z: bz + bh - sw_t - ft_offset, w: bw, h: ft_h, d: ft_w, color: "#71717a" });
+
+          // Left Wall (along Z, at X = bx, from Z = bz + sw_t to bz + bh - sw_t)
+          parts.push({ x: bx, y: 0, z: bz + sw_t, w: sw_t, h: sw_h, d: bh - 2 * sw_t, color: "#a1a1aa" });
+          parts.push({ x: bx - ft_offset, y: -ft_h, z: bz + sw_t, w: ft_w, h: ft_h, d: bh - 2 * sw_t, color: "#71717a" });
+
+          // Right Wall (along Z, at X = bx + bw - sw_t, from Z = bz + sw_t to bz + bh - sw_t)
+          parts.push({ x: bx + bw - sw_t, y: 0, z: bz + sw_t, w: sw_t, h: sw_h, d: bh - 2 * sw_t, color: "#a1a1aa" });
+          parts.push({ x: bx + bw - sw_t - ft_offset, y: -ft_h, z: bz + sw_t, w: ft_w, h: ft_h, d: bh - 2 * sw_t, color: "#71717a" });
+        }
       });
-    }
 
-    // Additional foundation for custom walls (for both stem-wall and slab types)
-    // We already handled exteriorWalls inside stem-wall block for stem-wall specific parts,
-    // but for slab it was missing. Let's make it consistent.
-    if (foundationType === 'slab' || foundationType === 'slab-on-grade') {
-      exteriorWalls.forEach(wall => {
-        let x = wall.xFt * 12 + wall.xInches;
-        let z = wall.yFt * 12 + wall.yInches;
-        let len = wall.lengthFt * 12 + wall.lengthInches;
-        const isHorizontal = wall.orientation === 'horizontal';
-
-        // Handle negative lengths (same as wall rendering)
-        if (isHorizontal && len < 0) { x += len; len = Math.abs(len); }
-        else if (!isHorizontal && len < 0) { z += len; len = Math.abs(len); }
-
-        // Account for exteriorSide offset (same adjustment as wall rendering)
-        if (isHorizontal && wall.exteriorSide === 1) z -= wall.thicknessIn;
-        else if (!isHorizontal && wall.exteriorSide === 1) x -= wall.thicknessIn;
-
-        drawFoundationPart(x, z, len, wall.thicknessIn, isHorizontal);
-      });
-    }
-
-    // Interior walls foundation
-    interiorWalls.forEach(wall => {
-      const x = wall.xFt * 12 + wall.xInches;
-      const z = wall.yFt * 12 + wall.yInches;
-      const len = wall.lengthFt * 12 + wall.lengthInches;
-      drawFoundationPart(x, z, len, wall.thicknessIn, wall.orientation === 'horizontal');
-    });
-
-    // Bumpouts Foundation
-    bumpouts.forEach(b => {
-      const wallId = b.wall;
-      const extWallList: { id: number, x: number, y: number, w: number, h: number, isHorizontal: boolean, exteriorSide: 1 | -1 }[] = [];
-      if (shape === 'rectangle') {
-        extWallList.push({ id: 1, x: 0, y: 0, w: widthIn, h: t, isHorizontal: true, exteriorSide: -1 });
-        extWallList.push({ id: 3, x: 0, y: lengthIn - t, w: widthIn, h: t, isHorizontal: true, exteriorSide: 1 });
-        extWallList.push({ id: 4, x: 0, y: t, w: t, h: lengthIn - 2 * t, isHorizontal: false, exteriorSide: -1 });
-        extWallList.push({ id: 2, x: widthIn - t, y: t, w: t, h: lengthIn - 2 * t, isHorizontal: false, exteriorSide: 1 });
-      } else if (shape === 'l-shape') {
-        extWallList.push({ id: 1, x: 0, y: 0, w: widthIn, h: t, isHorizontal: true, exteriorSide: -1 });
-        extWallList.push({ id: 2, x: widthIn - t, y: t, w: t, h: lRightDepthIn - t, isHorizontal: false, exteriorSide: 1 });
-        extWallList.push({ id: 3, x: lBackWidthIn, y: lRightDepthIn - t, w: widthIn - lBackWidthIn - t, h: t, isHorizontal: true, exteriorSide: 1 });
-        extWallList.push({ id: 4, x: lBackWidthIn, y: lRightDepthIn, w: t, h: lengthIn - lRightDepthIn - t, isHorizontal: false, exteriorSide: 1 });
-        extWallList.push({ id: 5, x: 0, y: lengthIn - t, w: lBackWidthIn + t, h: t, isHorizontal: true, exteriorSide: 1 });
-        extWallList.push({ id: 6, x: 0, y: t, w: t, h: lengthIn - 2 * t, isHorizontal: false, exteriorSide: -1 });
-      } else if (shape === 'u-shape') {
-        extWallList.push({ id: 1, x: 0, y: 0, w: uWallsIn.w1, h: t, isHorizontal: true, exteriorSide: -1 });
-        extWallList.push({ id: 2, x: uWallsIn.w1 - t, y: t, w: t, h: uWallsIn.w2 - t, isHorizontal: false, exteriorSide: 1 });
-        extWallList.push({ id: 3, x: uWallsIn.w1 - uWallsIn.w3, y: uWallsIn.w2 - t, w: uWallsIn.w3 - t, h: t, isHorizontal: true, exteriorSide: 1 });
-        extWallList.push({ id: 4, x: uWallsIn.w1 - uWallsIn.w3, y: uWallsIn.w2 - uWallsIn.w4, w: t, h: uWallsIn.w4 - t, isHorizontal: false, exteriorSide: 1 });
-        extWallList.push({ id: 5, x: uWallsIn.w7 - t, y: uWallsIn.w2 - uWallsIn.w4 - t, w: uWallsIn.w5 + 2 * t, h: t, isHorizontal: true, exteriorSide: -1 });
-        extWallList.push({ id: 6, x: uWallsIn.w7 - t, y: uWallsIn.w8 - uWallsIn.w6, w: t, h: uWallsIn.w6 - t, isHorizontal: false, exteriorSide: -1 });
-        extWallList.push({ id: 7, x: 0, y: uWallsIn.w8 - t, w: uWallsIn.w7, h: t, isHorizontal: true, exteriorSide: 1 });
-        extWallList.push({ id: 8, x: 0, y: t, w: t, h: uWallsIn.w8 - 2 * t, isHorizontal: false, exteriorSide: -1 });
-      }
-      
-      exteriorWalls.forEach(wall => {
+      interiorWalls.forEach(wall => {
         const x = wall.xFt * 12 + wall.xInches;
-        const y = wall.yFt * 12 + wall.yInches;
+        const z = wall.yFt * 12 + wall.yInches;
         const len = wall.lengthFt * 12 + wall.lengthInches;
-        const isHorizontal = wall.orientation === 'horizontal';
-        
-        let w = isHorizontal ? len : wall.thicknessIn;
-        let h = isHorizontal ? wall.thicknessIn : len;
-        let finalX = x;
-        let finalY = y;
-
-        if (w < 0) {
-          finalX += w;
-          w = Math.abs(w);
-        }
-        if (h < 0) {
-          finalY += h;
-          h = Math.abs(h);
-        }
-
-        if (isHorizontal) {
-          if (wall.exteriorSide === 1) finalY -= wall.thicknessIn;
-        } else {
-          if (wall.exteriorSide === 1) finalX -= wall.thicknessIn;
-        }
-
-        extWallList.push({
-          id: wall.id,
-          x: finalX,
-          y: finalY,
-          w,
-          h,
-          isHorizontal,
-          exteriorSide: wall.exteriorSide
-        });
+        drawFoundationPart(x, z, len, wall.thicknessIn, wall.orientation === 'horizontal');
       });
-
-      const extWall = extWallList.find(w => w.id === wallId);
-      if (!extWall) return;
-
-      const bx = b.xFt * 12 + b.xInches;
-      const bw = b.widthIn;
-      const bd = b.depthIn;
-      const isHorizontal = extWall.isHorizontal;
-      const wallX = extWall.x;
-      const wallY = extWall.y;
-
-      if (foundationType === 'slab' || foundationType === 'slab-on-grade') {
-        const slab_h = slabThicknessIn;
-        if (isHorizontal) {
-          const sy = extWall.exteriorSide === 1 ? wallY : wallY - bd + t;
-          parts.push({ x: wallX + bx, y: 0, z: sy, w: bw, h: slab_h, d: bd, color: "#a1a1aa" });
-          
-          if (foundationType === 'slab-on-grade') {
-            const edge_d = thickenedEdgeDepthIn;
-            const edge_w = 12;
-            const edge_y = sy + (bd - edge_w) / 2.0;
-            parts.push({ x: wallX + bx, y: -edge_d + slab_h, z: edge_y, w: bw, h: edge_d - slab_h, d: edge_w, color: "#71717a" });
+    } else {
+      if (foundationType !== 'none') {
+        // Perimeter - ONLY for stem-wall to avoid redundancy with slab
+        const t = thicknessIn;
+        if (foundationType === 'stem-wall') {
+          if (foundationShape === 'rectangle') {
+            drawFoundationPart(0, 0, widthIn, t, true);
+            drawFoundationPart(0, lengthIn - t, widthIn, t, true);
+            drawFoundationPart(0, t, lengthIn - 2 * t, t, false);
+            drawFoundationPart(widthIn - t, t, lengthIn - 2 * t, t, false);
+          } else if (foundationShape === 'l-shape') {
+            drawFoundationPart(0, 0, widthIn, t, true);
+            drawFoundationPart(widthIn - t, t, lRightDepthIn - t, t, false);
+            drawFoundationPart(lBackWidthIn, lRightDepthIn - t, widthIn - lBackWidthIn - t, t, true);
+            drawFoundationPart(lBackWidthIn, lRightDepthIn, lengthIn - lRightDepthIn - t, t, false);
+            drawFoundationPart(0, lengthIn - t, lBackWidthIn + t, t, true);
+            drawFoundationPart(0, t, lengthIn - 2 * t, t, false);
+          } else if (foundationShape === 'u-shape') {
+            drawFoundationPart(0, 0, uWallsIn.w1, t, true);
+            drawFoundationPart(uWallsIn.w1 - t, t, uWallsIn.w2 - t, t, false);
+            drawFoundationPart(uWallsIn.w1 - uWallsIn.w3, uWallsIn.w2 - t, uWallsIn.w3 - t, t, true);
+            drawFoundationPart(uWallsIn.w1 - uWallsIn.w3, uWallsIn.w2 - uWallsIn.w4, uWallsIn.w4 - t, t, false);
+            drawFoundationPart(uWallsIn.w7 - t, uWallsIn.w2 - uWallsIn.w4 - t, uWallsIn.w5 + 2 * t, t, true);
+            drawFoundationPart(uWallsIn.w7 - t, uWallsIn.w8 - uWallsIn.w6, uWallsIn.w6 - t, t, false);
+            drawFoundationPart(0, uWallsIn.w8 - t, uWallsIn.w7, t, true);
+            drawFoundationPart(0, t, uWallsIn.w8 - 2 * t, t, false);
+          } else if (foundationShape === 'h-shape') {
+            drawFoundationPart(0, 0, hLeftBarWidthIn, t, true);
+            drawFoundationPart(hLeftBarWidthIn - t, t, hMiddleBarOffsetIn - t, t, false);
+            drawFoundationPart(hLeftBarWidthIn - t, hMiddleBarOffsetIn + hMiddleBarHeightIn, lengthIn - (hMiddleBarOffsetIn + hMiddleBarHeightIn) - t, t, false);
+            drawFoundationPart(0, lengthIn - t, hLeftBarWidthIn, t, true);
+            drawFoundationPart(0, t, lengthIn - 2 * t, t, false);
+            drawFoundationPart(hLeftBarWidthIn, hMiddleBarOffsetIn, widthIn - hLeftBarWidthIn - hRightBarWidthIn, t, true);
+            drawFoundationPart(hLeftBarWidthIn, hMiddleBarOffsetIn + hMiddleBarHeightIn - t, widthIn - hLeftBarWidthIn - hRightBarWidthIn, t, true);
+            drawFoundationPart(widthIn - hRightBarWidthIn, 0, hRightBarWidthIn, t, true);
+            drawFoundationPart(widthIn - hRightBarWidthIn, t, hMiddleBarOffsetIn - t, t, false);
+            drawFoundationPart(widthIn - hRightBarWidthIn, hMiddleBarOffsetIn + hMiddleBarHeightIn, lengthIn - (hMiddleBarOffsetIn + hMiddleBarHeightIn) - t, t, false);
+            drawFoundationPart(widthIn - hRightBarWidthIn, lengthIn - t, hRightBarWidthIn, t, true);
+            drawFoundationPart(widthIn - t, t, lengthIn - 2 * t, t, false);
+          } else if (foundationShape === 't-shape') {
+            const stemX = (tTopWidthIn - tStemWidthIn) / 2;
+            drawFoundationPart(0, 0, tTopWidthIn, t, true);
+            drawFoundationPart(tTopWidthIn - t, t, tTopLengthIn - 2 * t, t, false);
+            drawFoundationPart(stemX + tStemWidthIn, tTopLengthIn - t, tTopWidthIn - (stemX + tStemWidthIn), t, true);
+            drawFoundationPart(0, tTopLengthIn - t, stemX, t, true);
+            drawFoundationPart(0, t, tTopLengthIn - 2 * t, t, false);
+            drawFoundationPart(stemX, tTopLengthIn, tStemLengthIn - t, t, false);
+            drawFoundationPart(stemX + tStemWidthIn - t, tTopLengthIn, tStemLengthIn - t, t, false);
+            drawFoundationPart(stemX, tTopLengthIn + tStemLengthIn - t, tStemWidthIn, t, true);
+          } else if (foundationShape === 'custom') {
+            const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
+            blocksToUse.forEach(block => {
+              drawFoundationPart(block.x, block.y, block.w, block.h, true);
+            });
           }
-        } else {
-          const sx = extWall.exteriorSide === 1 ? wallX : wallX - bd + t;
-          parts.push({ x: sx, y: 0, z: wallY + bx, w: bd, h: slab_h, d: bw, color: "#a1a1aa" });
           
-          if (foundationType === 'slab-on-grade') {
-            const edge_d = thickenedEdgeDepthIn;
-            const edge_w = 12;
-            const edge_x = sx + (bd - edge_w) / 2.0;
-            parts.push({ x: edge_x, y: -edge_d + slab_h, z: wallY + bx, w: edge_w, h: edge_d - slab_h, d: bw, color: "#71717a" });
-          }
-        }
-      } else {
-        if (isHorizontal) {
-          const sy = extWall.exteriorSide === 1 ? wallY : wallY - bd + t;
-          drawFoundationPart(wallX + bx, sy, t, bd, false);
-          drawFoundationPart(wallX + bx + bw - t, sy, t, bd, false);
-          drawFoundationPart(wallX + bx, wallY + extWall.exteriorSide * (bd - t), bw, t, true);
-        } else {
-          const sx = extWall.exteriorSide === 1 ? wallX : wallX - bd + t;
-          drawFoundationPart(sx, wallY + bx, bd, t, true);
-          drawFoundationPart(sx, wallY + bx + bw - t, bd, t, true);
-          drawFoundationPart(wallX + extWall.exteriorSide * (bd - t), wallY + bx, t, bw, false);
-        }
-      }
-    });
+          // Custom walls foundation
+          exteriorWalls.forEach(wall => {
+            let x = wall.xFt * 12 + wall.xInches;
+            let z = wall.yFt * 12 + wall.yInches;
+            let len = wall.lengthFt * 12 + wall.lengthInches;
+            const isHorizontal = wall.orientation === 'horizontal';
 
-    // Main Slab
-    if (foundationType === 'slab' || foundationType === 'slab-on-grade') {
-      const slab_h = slabThicknessIn;
-      if (foundationShape === 'rectangle') {
-        parts.push({ x: 0, y: 0, z: 0, w: widthIn, h: slab_h, d: lengthIn, color: "#a1a1aa" });
-      } else if (foundationShape === 'l-shape') {
-        // L-shape slab as 2 boxes
-        parts.push({ x: 0, y: 0, z: 0, w: widthIn, h: slab_h, d: lRightDepthIn, color: "#a1a1aa" });
-        parts.push({ x: 0, y: 0, z: lRightDepthIn, w: lBackWidthIn, h: slab_h, d: lengthIn - lRightDepthIn, color: "#a1a1aa" });
-      } else if (foundationShape === 'u-shape') {
-        // U-shape slab as 3 boxes
-        parts.push({ x: 0, y: 0, z: 0, w: uWallsIn.w7, h: slab_h, d: uWallsIn.w8, color: "#a1a1aa" }); // Left leg
-        parts.push({ x: uWallsIn.w1 - uWallsIn.w3, y: 0, z: 0, w: uWallsIn.w3, h: slab_h, d: uWallsIn.w2, color: "#a1a1aa" }); // Right leg
-        parts.push({ x: uWallsIn.w7, y: 0, z: 0, w: uWallsIn.w1 - uWallsIn.w3 - uWallsIn.w7, h: slab_h, d: uWallsIn.w2 - uWallsIn.w4, color: "#a1a1aa" }); // Bridge
-      } else if (foundationShape === 'h-shape') {
-        parts.push({ x: 0, y: 0, z: 0, w: hLeftBarWidthIn, h: slab_h, d: lengthIn, color: "#a1a1aa" });
-        parts.push({ x: hLeftBarWidthIn, y: 0, z: hMiddleBarOffsetIn, w: widthIn - hLeftBarWidthIn - hRightBarWidthIn, h: slab_h, d: hMiddleBarHeightIn, color: "#a1a1aa" });
-        parts.push({ x: widthIn - hRightBarWidthIn, y: 0, z: 0, w: hRightBarWidthIn, h: slab_h, d: lengthIn, color: "#a1a1aa" });
-      } else if (foundationShape === 't-shape') {
-        const stemX = (tTopWidthIn - tStemWidthIn) / 2;
-        parts.push({ x: 0, y: 0, z: 0, w: tTopWidthIn, h: slab_h, d: tTopLengthIn, color: "#a1a1aa" });
-        parts.push({ x: stemX, y: 0, z: tTopLengthIn, w: tStemWidthIn, h: slab_h, d: tStemLengthIn, color: "#a1a1aa" });
-      } else if (foundationShape === 'custom') {
-        const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
-        if (blocksToUse && blocksToUse.length > 0) {
-          blocksToUse.forEach(block => {
-            parts.push({ x: block.x, y: 0, z: block.y, w: block.w, h: slab_h, d: block.h, color: "#a1a1aa" });
+            // Handle negative lengths (same as wall rendering)
+            if (isHorizontal && len < 0) { x += len; len = Math.abs(len); }
+            else if (!isHorizontal && len < 0) { z += len; len = Math.abs(len); }
+
+            // Account for exteriorSide offset (same adjustment as wall rendering)
+            if (isHorizontal && wall.exteriorSide === 1) z -= wall.thicknessIn;
+            else if (!isHorizontal && wall.exteriorSide === 1) x -= wall.thicknessIn;
+
+            drawFoundationPart(x, z, len, wall.thicknessIn, isHorizontal);
           });
-        } else if (exteriorWalls.length > 0) {
-          // Derive slab footprint from exterior walls using a grid-fill approach
-          const wallRects = exteriorWalls.map(w => {
-            let x = w.xFt * 12 + w.xInches;
-            let z = w.yFt * 12 + w.yInches;
-            let len = w.lengthFt * 12 + w.lengthInches;
-            const isH = w.orientation === 'horizontal';
-            let rw = isH ? len : w.thicknessIn;
-            let rd = isH ? w.thicknessIn : len;
-            if (rw < 0) { x += rw; rw = Math.abs(rw); }
-            if (rd < 0) { z += rd; rd = Math.abs(rd); }
-            if (isH && w.exteriorSide === 1) z -= w.thicknessIn;
-            else if (!isH && w.exteriorSide === 1) x -= w.thicknessIn;
-            return { x, z, w: rw, d: rd };
+        }
+
+        // Additional foundation for custom walls (for both stem-wall and slab types)
+        // We already handled exteriorWalls inside stem-wall block for stem-wall specific parts,
+        // but for slab it was missing. Let's make it consistent.
+        if (foundationType === 'slab' || foundationType === 'slab-on-grade') {
+          exteriorWalls.forEach(wall => {
+            let x = wall.xFt * 12 + wall.xInches;
+            let z = wall.yFt * 12 + wall.yInches;
+            let len = wall.lengthFt * 12 + wall.lengthInches;
+            const isHorizontal = wall.orientation === 'horizontal';
+
+            // Handle negative lengths (same as wall rendering)
+            if (isHorizontal && len < 0) { x += len; len = Math.abs(len); }
+            else if (!isHorizontal && len < 0) { z += len; len = Math.abs(len); }
+
+            // Account for exteriorSide offset (same adjustment as wall rendering)
+            if (isHorizontal && wall.exteriorSide === 1) z -= wall.thicknessIn;
+            else if (!isHorizontal && wall.exteriorSide === 1) x -= wall.thicknessIn;
+
+            drawFoundationPart(x, z, len, wall.thicknessIn, isHorizontal);
           });
-          // Collect unique X and Y breakpoints
-          const xSet = new Set<number>();
-          const zSet = new Set<number>();
-          wallRects.forEach(r => { xSet.add(r.x); xSet.add(r.x + r.w); zSet.add(r.z); zSet.add(r.z + r.d); });
-          const xs = [...xSet].sort((a, b) => a - b);
-          const zs = [...zSet].sort((a, b) => a - b);
-          if (xs.length >= 2 && zs.length >= 2) {
-            // Build grid and mark cells that overlap with any wall
-            const grid: boolean[][] = Array.from({ length: xs.length - 1 }, () => Array(zs.length - 1).fill(false));
-            for (let i = 0; i < xs.length - 1; i++) {
-              for (let j = 0; j < zs.length - 1; j++) {
-                const cx = (xs[i] + xs[i + 1]) / 2;
-                const cz = (zs[j] + zs[j + 1]) / 2;
-                if (wallRects.some(r => cx >= r.x && cx <= r.x + r.w && cz >= r.z && cz <= r.z + r.d)) {
-                  grid[i][j] = true;
-                }
+        }
+
+        // Interior walls foundation
+        interiorWalls.forEach(wall => {
+          const x = wall.xFt * 12 + wall.xInches;
+          const z = wall.yFt * 12 + wall.yInches;
+          const len = wall.lengthFt * 12 + wall.lengthInches;
+          drawFoundationPart(x, z, len, wall.thicknessIn, wall.orientation === 'horizontal');
+        });
+
+        // Bumpouts Foundation
+        bumpouts.forEach(b => {
+          const wallId = b.wall;
+          const extWallList: { id: number, x: number, y: number, w: number, h: number, isHorizontal: boolean, exteriorSide: 1 | -1 }[] = [];
+          if (shape === 'rectangle') {
+            extWallList.push({ id: 1, x: 0, y: 0, w: widthIn, h: t, isHorizontal: true, exteriorSide: -1 });
+            extWallList.push({ id: 3, x: 0, y: lengthIn - t, w: widthIn, h: t, isHorizontal: true, exteriorSide: 1 });
+            extWallList.push({ id: 4, x: 0, y: t, w: t, h: lengthIn - 2 * t, isHorizontal: false, exteriorSide: -1 });
+            extWallList.push({ id: 2, x: widthIn - t, y: t, w: t, h: lengthIn - 2 * t, isHorizontal: false, exteriorSide: 1 });
+          } else if (shape === 'l-shape') {
+            extWallList.push({ id: 1, x: 0, y: 0, w: widthIn, h: t, isHorizontal: true, exteriorSide: -1 });
+            extWallList.push({ id: 2, x: widthIn - t, y: t, w: t, h: lRightDepthIn - t, isHorizontal: false, exteriorSide: 1 });
+            extWallList.push({ id: 3, x: lBackWidthIn, y: lRightDepthIn - t, w: widthIn - lBackWidthIn - t, h: t, isHorizontal: true, exteriorSide: 1 });
+            extWallList.push({ id: 4, x: lBackWidthIn, y: lRightDepthIn, w: t, h: lengthIn - lRightDepthIn - t, isHorizontal: false, exteriorSide: 1 });
+            extWallList.push({ id: 5, x: 0, y: lengthIn - t, w: lBackWidthIn + t, h: t, isHorizontal: true, exteriorSide: 1 });
+            extWallList.push({ id: 6, x: 0, y: t, w: t, h: lengthIn - 2 * t, isHorizontal: false, exteriorSide: -1 });
+          } else if (shape === 'u-shape') {
+            extWallList.push({ id: 1, x: 0, y: 0, w: uWallsIn.w1, h: t, isHorizontal: true, exteriorSide: -1 });
+            extWallList.push({ id: 2, x: uWallsIn.w1 - t, y: t, w: t, h: uWallsIn.w2 - t, isHorizontal: false, exteriorSide: 1 });
+            extWallList.push({ id: 3, x: uWallsIn.w1 - uWallsIn.w3, y: uWallsIn.w2 - t, w: uWallsIn.w3 - t, h: t, isHorizontal: true, exteriorSide: 1 });
+            extWallList.push({ id: 4, x: uWallsIn.w1 - uWallsIn.w3, y: uWallsIn.w2 - uWallsIn.w4, w: t, h: uWallsIn.w4 - t, isHorizontal: false, exteriorSide: 1 });
+            extWallList.push({ id: 5, x: uWallsIn.w7 - t, y: uWallsIn.w2 - uWallsIn.w4 - t, w: uWallsIn.w5 + 2 * t, h: t, isHorizontal: true, exteriorSide: -1 });
+            extWallList.push({ id: 6, x: uWallsIn.w7 - t, y: uWallsIn.w8 - uWallsIn.w6, w: t, h: uWallsIn.w6 - t, isHorizontal: false, exteriorSide: -1 });
+            extWallList.push({ id: 7, x: 0, y: uWallsIn.w8 - t, w: uWallsIn.w7, h: t, isHorizontal: true, exteriorSide: 1 });
+            extWallList.push({ id: 8, x: 0, y: t, w: t, h: uWallsIn.w8 - 2 * t, isHorizontal: false, exteriorSide: -1 });
+          }
+          
+          exteriorWalls.forEach(wall => {
+            const x = wall.xFt * 12 + wall.xInches;
+            const y = wall.yFt * 12 + wall.yInches;
+            const len = wall.lengthFt * 12 + wall.lengthInches;
+            const isHorizontal = wall.orientation === 'horizontal';
+            
+            let w = isHorizontal ? len : wall.thicknessIn;
+            let h = isHorizontal ? wall.thicknessIn : len;
+            let finalX = x;
+            let finalY = y;
+
+            if (w < 0) {
+              finalX += w;
+              w = Math.abs(w);
+            }
+            if (h < 0) {
+              finalY += h;
+              h = Math.abs(h);
+            }
+
+            if (isHorizontal) {
+              if (wall.exteriorSide === 1) finalY -= wall.thicknessIn;
+            } else {
+              if (wall.exteriorSide === 1) finalX -= wall.thicknessIn;
+            }
+
+            extWallList.push({
+              id: wall.id,
+              x: finalX,
+              y: finalY,
+              w,
+              h,
+              isHorizontal,
+              exteriorSide: wall.exteriorSide
+            });
+          });
+
+          const extWall = extWallList.find(w => w.id === wallId);
+          if (!extWall) return;
+
+          const bx = b.xFt * 12 + b.xInches;
+          const bw = b.widthIn;
+          const bd = b.depthIn;
+          const isHorizontal = extWall.isHorizontal;
+          const wallX = extWall.x;
+          const wallY = extWall.y;
+
+          if (foundationType === 'slab' || foundationType === 'slab-on-grade') {
+            const slab_h = slabThicknessIn;
+            if (isHorizontal) {
+              const sy = extWall.exteriorSide === 1 ? wallY : wallY - bd + t;
+              parts.push({ x: wallX + bx, y: 0, z: sy, w: bw, h: slab_h, d: bd, color: "#a1a1aa" });
+              
+              if (foundationType === 'slab-on-grade') {
+                const edge_d = thickenedEdgeDepthIn;
+                const edge_w = 12;
+                const edge_y = sy + (bd - edge_w) / 2.0;
+                parts.push({ x: wallX + bx, y: -edge_d + slab_h, z: edge_y, w: bw, h: edge_d - slab_h, d: edge_w, color: "#71717a" });
+              }
+            } else {
+              const sx = extWall.exteriorSide === 1 ? wallX : wallX - bd + t;
+              parts.push({ x: sx, y: 0, z: wallY + bx, w: bd, h: slab_h, d: bw, color: "#a1a1aa" });
+              
+              if (foundationType === 'slab-on-grade') {
+                const edge_d = thickenedEdgeDepthIn;
+                const edge_w = 12;
+                const edge_x = sx + (bd - edge_w) / 2.0;
+                parts.push({ x: edge_x, y: -edge_d + slab_h, z: wallY + bx, w: edge_w, h: edge_d - slab_h, d: bw, color: "#71717a" });
               }
             }
-            // Flood-fill interior: find cells bounded by wall cells on all sides
-            // Simple approach: fill any cell whose row has walls on both left and right
-            for (let j = 0; j < zs.length - 1; j++) {
-              let leftWall = -1;
-              for (let i = 0; i < xs.length - 1; i++) {
-                if (grid[i][j]) {
-                  if (leftWall >= 0) {
-                    // Fill all cells between leftWall and current wall
-                    for (let k = leftWall; k <= i; k++) {
-                      grid[k][j] = true;
+          } else {
+            if (isHorizontal) {
+              const sy = extWall.exteriorSide === 1 ? wallY : wallY - bd + t;
+              drawFoundationPart(wallX + bx, sy, t, bd, false);
+              drawFoundationPart(wallX + bx + bw - t, sy, t, bd, false);
+              drawFoundationPart(wallX + bx, wallY + extWall.exteriorSide * (bd - t), bw, t, true);
+            } else {
+              const sx = extWall.exteriorSide === 1 ? wallX : wallX - bd + t;
+              drawFoundationPart(sx, wallY + bx, bd, t, true);
+              drawFoundationPart(sx, wallY + bx + bw - t, bd, t, true);
+              drawFoundationPart(wallX + extWall.exteriorSide * (bd - t), wallY + bx, t, bw, false);
+            }
+          }
+        });
+
+        // Main Slab
+        if (foundationType === 'slab' || foundationType === 'slab-on-grade') {
+          const slab_h = slabThicknessIn;
+          if (foundationShape === 'rectangle') {
+            parts.push({ x: 0, y: 0, z: 0, w: widthIn, h: slab_h, d: lengthIn, color: "#a1a1aa" });
+          } else if (foundationShape === 'l-shape') {
+            // L-shape slab as 2 boxes
+            parts.push({ x: 0, y: 0, z: 0, w: widthIn, h: slab_h, d: lRightDepthIn, color: "#a1a1aa" });
+            parts.push({ x: 0, y: 0, z: lRightDepthIn, w: lBackWidthIn, h: slab_h, d: lengthIn - lRightDepthIn, color: "#a1a1aa" });
+          } else if (foundationShape === 'u-shape') {
+            // U-shape slab as 3 boxes
+            parts.push({ x: 0, y: 0, z: 0, w: uWallsIn.w7, h: slab_h, d: uWallsIn.w8, color: "#a1a1aa" }); // Left leg
+            parts.push({ x: uWallsIn.w1 - uWallsIn.w3, y: 0, z: 0, w: uWallsIn.w3, h: slab_h, d: uWallsIn.w2, color: "#a1a1aa" }); // Right leg
+            parts.push({ x: uWallsIn.w7, y: 0, z: 0, w: uWallsIn.w1 - uWallsIn.w3 - uWallsIn.w7, h: slab_h, d: uWallsIn.w2 - uWallsIn.w4, color: "#a1a1aa" }); // Bridge
+          } else if (foundationShape === 'h-shape') {
+            parts.push({ x: 0, y: 0, z: 0, w: hLeftBarWidthIn, h: slab_h, d: lengthIn, color: "#a1a1aa" });
+            parts.push({ x: hLeftBarWidthIn, y: 0, z: hMiddleBarOffsetIn, w: widthIn - hLeftBarWidthIn - hRightBarWidthIn, h: slab_h, d: hMiddleBarHeightIn, color: "#a1a1aa" });
+            parts.push({ x: widthIn - hRightBarWidthIn, y: 0, z: 0, w: hRightBarWidthIn, h: slab_h, d: lengthIn, color: "#a1a1aa" });
+          } else if (foundationShape === 't-shape') {
+            const stemX = (tTopWidthIn - tStemWidthIn) / 2;
+            parts.push({ x: 0, y: 0, z: 0, w: tTopWidthIn, h: slab_h, d: tTopLengthIn, color: "#a1a1aa" });
+            parts.push({ x: stemX, y: 0, z: tTopLengthIn, w: tStemWidthIn, h: slab_h, d: tStemLengthIn, color: "#a1a1aa" });
+          } else if (foundationShape === 'custom') {
+            const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
+            if (blocksToUse && blocksToUse.length > 0) {
+              blocksToUse.forEach(block => {
+                parts.push({ x: block.x, y: 0, z: block.y, w: block.w, h: slab_h, d: block.h, color: "#a1a1aa" });
+              });
+            } else if (exteriorWalls.length > 0) {
+              // Derive slab footprint from exterior walls using a grid-fill approach
+              const wallRects = exteriorWalls.map(w => {
+                let x = w.xFt * 12 + w.xInches;
+                let z = w.yFt * 12 + w.yInches;
+                let len = w.lengthFt * 12 + w.lengthInches;
+                const isH = w.orientation === 'horizontal';
+                let rw = isH ? len : w.thicknessIn;
+                let rd = isH ? w.thicknessIn : len;
+                if (rw < 0) { x += rw; rw = Math.abs(rw); }
+                if (rd < 0) { z += rd; rd = Math.abs(rd); }
+                if (isH && w.exteriorSide === 1) z -= w.thicknessIn;
+                else if (!isH && w.exteriorSide === 1) x -= w.thicknessIn;
+                return { x, z, w: rw, d: rd };
+              });
+              // Collect unique X and Y breakpoints
+              const xSet = new Set<number>();
+              const zSet = new Set<number>();
+              wallRects.forEach(r => { xSet.add(r.x); xSet.add(r.x + r.w); zSet.add(r.z); zSet.add(r.z + r.d); });
+              const xs = [...xSet].sort((a, b) => a - b);
+              const zs = [...zSet].sort((a, b) => a - b);
+              if (xs.length >= 2 && zs.length >= 2) {
+                // Build grid and mark cells that overlap with any wall
+                const grid: boolean[][] = Array.from({ length: xs.length - 1 }, () => Array(zs.length - 1).fill(false));
+                for (let i = 0; i < xs.length - 1; i++) {
+                  for (let j = 0; j < zs.length - 1; j++) {
+                    const cx = (xs[i] + xs[i + 1]) / 2;
+                    const cz = (zs[j] + zs[j + 1]) / 2;
+                    if (wallRects.some(r => cx >= r.x && cx <= r.x + r.w && cz >= r.z && cz <= r.z + r.d)) {
+                      grid[i][j] = true;
                     }
                   }
-                  leftWall = i;
                 }
-              }
-            }
-            // Also fill vertically: any cell with walls above and below
-            for (let i = 0; i < xs.length - 1; i++) {
-              let topWall = -1;
-              for (let j = 0; j < zs.length - 1; j++) {
-                if (grid[i][j]) {
-                  if (topWall >= 0) {
-                    for (let k = topWall; k <= j; k++) {
-                      grid[i][k] = true;
+                // Flood-fill interior: find cells bounded by wall cells on all sides
+                // Simple approach: fill any cell whose row has walls on both left and right
+                for (let j = 0; j < zs.length - 1; j++) {
+                  let leftWall = -1;
+                  for (let i = 0; i < xs.length - 1; i++) {
+                    if (grid[i][j]) {
+                      if (leftWall >= 0) {
+                        // Fill all cells between leftWall and current wall
+                        for (let k = leftWall; k <= i; k++) {
+                          grid[k][j] = true;
+                        }
+                      }
+                      leftWall = i;
                     }
                   }
-                  topWall = j;
                 }
-              }
-            }
-            // Emit filled cells as slab parts
-            for (let i = 0; i < xs.length - 1; i++) {
-              for (let j = 0; j < zs.length - 1; j++) {
-                if (grid[i][j]) {
-                  const cellW = xs[i + 1] - xs[i];
-                  const cellD = zs[j + 1] - zs[j];
-                  if (cellW > 0.01 && cellD > 0.01) {
-                    parts.push({ x: xs[i], y: 0, z: zs[j], w: cellW, h: slab_h, d: cellD, color: "#a1a1aa" });
+                // Also fill vertically: any cell with walls above and below
+                for (let i = 0; i < xs.length - 1; i++) {
+                  let topWall = -1;
+                  for (let j = 0; j < zs.length - 1; j++) {
+                    if (grid[i][j]) {
+                      if (topWall >= 0) {
+                        for (let k = topWall; k <= j; k++) {
+                          grid[i][k] = true;
+                        }
+                      }
+                      topWall = j;
+                    }
+                  }
+                }
+                // Emit filled cells as slab parts
+                for (let i = 0; i < xs.length - 1; i++) {
+                  for (let j = 0; j < zs.length - 1; j++) {
+                    if (grid[i][j]) {
+                      const cellW = xs[i + 1] - xs[i];
+                      const cellD = zs[j + 1] - zs[j];
+                      if (cellW > 0.01 && cellD > 0.01) {
+                        parts.push({ x: xs[i], y: 0, z: zs[j], w: cellW, h: slab_h, d: cellD, color: "#a1a1aa" });
+                      }
+                    }
                   }
                 }
               }
@@ -2671,7 +2732,7 @@ export default function Preview3D({
     }
 
     return parts;
-  }, [foundationType, foundationShape, stemWallHeightIn, stemWallThicknessIn, footingWidthIn, footingThicknessIn, slabThicknessIn, thickenedEdgeDepthIn, widthIn, lengthIn, thicknessIn, lRightDepthIn, lBackWidthIn, uWallsIn, hLeftBarWidthIn, hRightBarWidthIn, hMiddleBarHeightIn, hMiddleBarOffsetIn, tTopWidthIn, tTopLengthIn, tStemWidthIn, tStemLengthIn, exteriorWalls, bumpouts, shape, interiorWalls, combinedBlocks, shapeBlocks, currentFloorIndex]);
+  }, [foundationType, foundationShape, stemWallHeightIn, stemWallThicknessIn, footingWidthIn, footingThicknessIn, slabThicknessIn, thickenedEdgeDepthIn, widthIn, lengthIn, thicknessIn, lRightDepthIn, lBackWidthIn, uWallsIn, hLeftBarWidthIn, hRightBarWidthIn, hMiddleBarHeightIn, hMiddleBarOffsetIn, tTopWidthIn, tTopLengthIn, tStemWidthIn, tStemLengthIn, exteriorWalls, bumpouts, shape, interiorWalls, combinedBlocks, shapeBlocks, currentFloorIndex, floorBays]);
 
   const openings = useMemo(() => {
     const list: { x: number, y: number, z: number, w: number, h: number, d: number }[] = [];
@@ -3020,6 +3081,11 @@ export default function Preview3D({
         const t_joist = 1.5;
 
         floorBays.forEach(bay => {
+          const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : foundationType;
+          if (bayFoundation === 'slab' || bayFoundation === 'slab-on-grade' || bayFoundation === 'none') {
+            return; // Skip floor framing inside concrete slabs or no-foundation zones
+          }
+
           const bx = bay.x;
           const bz = bay.y; // bay.y maps to Z in 3D
           const bw = bay.width;
@@ -3205,28 +3271,38 @@ export default function Preview3D({
       if (addSubfloor) {
         const sfColor = subfloorMaterial === 'plywood' ? "#deb887" : "#cd853f";
         const sfY = currentY + joistH;
-        if (shape === 'rectangle') {
-          parts.push({ x: 0, y: sfY, z: 0, w: widthIn, h: subfloorThickness, d: lengthIn, color: sfColor });
-        } else if (shape === 'l-shape') {
-          parts.push({ x: 0, y: sfY, z: 0, w: widthIn, h: subfloorThickness, d: lRightDepthIn, color: sfColor });
-          parts.push({ x: 0, y: sfY, z: lRightDepthIn, w: lBackWidthIn, h: subfloorThickness, d: lengthIn - lRightDepthIn, color: sfColor });
-        } else if (shape === 'u-shape') {
-          parts.push({ x: 0, y: sfY, z: 0, w: uWallsIn.w7, h: subfloorThickness, d: uWallsIn.w8, color: sfColor });
-          parts.push({ x: uWallsIn.w1 - uWallsIn.w3, y: sfY, z: 0, w: uWallsIn.w3, h: subfloorThickness, d: uWallsIn.w2, color: sfColor });
-          parts.push({ x: uWallsIn.w7, y: sfY, z: 0, w: uWallsIn.w1 - uWallsIn.w3 - uWallsIn.w7, h: subfloorThickness, d: uWallsIn.w2 - uWallsIn.w4, color: sfColor });
-        } else if (shape === 'h-shape') {
-          parts.push({ x: 0, y: sfY, z: 0, w: hLeftBarWidthIn, h: subfloorThickness, d: lengthIn, color: sfColor });
-          parts.push({ x: hLeftBarWidthIn, y: sfY, z: hMiddleBarOffsetIn, w: widthIn - hLeftBarWidthIn - hRightBarWidthIn, h: subfloorThickness, d: hMiddleBarHeightIn, color: sfColor });
-          parts.push({ x: widthIn - hRightBarWidthIn, y: sfY, z: 0, w: hRightBarWidthIn, h: subfloorThickness, d: lengthIn, color: sfColor });
-        } else if (shape === 't-shape') {
-          const stemX = (tTopWidthIn - tStemWidthIn) / 2;
-          parts.push({ x: 0, y: sfY, z: 0, w: tTopWidthIn, h: subfloorThickness, d: tTopLengthIn, color: sfColor });
-          parts.push({ x: stemX, y: sfY, z: tTopLengthIn, w: tStemWidthIn, h: subfloorThickness, d: tStemLengthIn, color: sfColor });
-        } else if (shape === 'custom') {
-          const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
-          blocksToUse.forEach(block => {
-            parts.push({ x: block.x, y: sfY, z: block.y, w: block.w, h: subfloorThickness, d: block.h, color: sfColor });
+        if (floorBays && floorBays.length > 0 && currentY === foundationHeight) {
+          // Render subfloor sheets only over non-slab/none bays on the first floor
+          floorBays.forEach(bay => {
+            const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : foundationType;
+            if (bayFoundation !== 'slab' && bayFoundation !== 'slab-on-grade' && bayFoundation !== 'none') {
+              parts.push({ x: bay.x, y: sfY, z: bay.y, w: bay.width, h: subfloorThickness, d: bay.height, color: sfColor });
+            }
           });
+        } else {
+          if (shape === 'rectangle') {
+            parts.push({ x: 0, y: sfY, z: 0, w: widthIn, h: subfloorThickness, d: lengthIn, color: sfColor });
+          } else if (shape === 'l-shape') {
+            parts.push({ x: 0, y: sfY, z: 0, w: widthIn, h: subfloorThickness, d: lRightDepthIn, color: sfColor });
+            parts.push({ x: 0, y: sfY, z: lRightDepthIn, w: lBackWidthIn, h: subfloorThickness, d: lengthIn - lRightDepthIn, color: sfColor });
+          } else if (shape === 'u-shape') {
+            parts.push({ x: 0, y: sfY, z: 0, w: uWallsIn.w7, h: subfloorThickness, d: uWallsIn.w8, color: sfColor });
+            parts.push({ x: uWallsIn.w1 - uWallsIn.w3, y: sfY, z: 0, w: uWallsIn.w3, h: subfloorThickness, d: uWallsIn.w2, color: sfColor });
+            parts.push({ x: uWallsIn.w7, y: sfY, z: 0, w: uWallsIn.w1 - uWallsIn.w3 - uWallsIn.w7, h: subfloorThickness, d: uWallsIn.w2 - uWallsIn.w4, color: sfColor });
+          } else if (shape === 'h-shape') {
+            parts.push({ x: 0, y: sfY, z: 0, w: hLeftBarWidthIn, h: subfloorThickness, d: lengthIn, color: sfColor });
+            parts.push({ x: hLeftBarWidthIn, y: sfY, z: hMiddleBarOffsetIn, w: widthIn - hLeftBarWidthIn - hRightBarWidthIn, h: subfloorThickness, d: hMiddleBarHeightIn, color: sfColor });
+            parts.push({ x: widthIn - hRightBarWidthIn, y: sfY, z: 0, w: hRightBarWidthIn, h: subfloorThickness, d: lengthIn, color: sfColor });
+          } else if (shape === 't-shape') {
+            const stemX = (tTopWidthIn - tStemWidthIn) / 2;
+            parts.push({ x: 0, y: sfY, z: 0, w: tTopWidthIn, h: subfloorThickness, d: tTopLengthIn, color: sfColor });
+            parts.push({ x: stemX, y: sfY, z: tTopLengthIn, w: tStemWidthIn, h: subfloorThickness, d: tStemLengthIn, color: sfColor });
+          } else if (shape === 'custom') {
+            const blocksToUse = (combinedBlocks && combinedBlocks.length > 0) ? combinedBlocks : shapeBlocks;
+            blocksToUse.forEach(block => {
+              parts.push({ x: block.x, y: sfY, z: block.y, w: block.w, h: subfloorThickness, d: block.h, color: sfColor });
+            });
+          }
         }
       }
     };
@@ -3304,6 +3380,7 @@ export default function Preview3D({
 
     const mockState = {
       shape,
+      foundationType,
       widthFt: Math.floor(widthIn / 12),
       widthInches: widthIn % 12,
       lengthFt: Math.floor(lengthIn / 12),
@@ -3357,7 +3434,7 @@ export default function Preview3D({
     const activeBays = floorBays && floorBays.length > 0 ? floorBays : detectBays(mockState);
     const parsedBays = activeBays.map(bay => {
       const direction = floorBays && floorBays.length > 0 ? bay.joistDirection : joistDirection;
-      return { ...bay, joistDirection: direction };
+      return { ...bay, joistDirection: direction, foundationType: bay.foundationType };
     });
 
     let beamWidth = 4.5;
@@ -3762,43 +3839,64 @@ export default function Preview3D({
                 </group>
               )}
 
-              {!addFloorFraming && foundationType !== 'slab' && foundationType !== 'slab-on-grade' && (
+              {!addFloorFraming && (
                 <group>
-                  {shape === 'rectangle' && <FoundationPart x={0} y={foundationHeight} z={0} w={widthIn} h={subfloorThickness} d={lengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />}
-                  {shape === 'l-shape' && (
-                    <>
-                      <FoundationPart x={0} y={foundationHeight} z={0} w={widthIn} h={subfloorThickness} d={lRightDepthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                      <FoundationPart x={0} y={foundationHeight} z={lRightDepthIn} w={lBackWidthIn} h={subfloorThickness} d={lengthIn - lRightDepthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                    </>
+                  {floorBays && floorBays.length > 0 ? (
+                    floorBays.filter(bay => {
+                      const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : foundationType;
+                      return bayFoundation !== 'slab' && bayFoundation !== 'slab-on-grade' && bayFoundation !== 'none';
+                    }).map(bay => (
+                      <FoundationPart
+                        key={bay.id}
+                        x={bay.x} y={foundationHeight} z={bay.y}
+                        w={bay.width} h={subfloorThickness} d={bay.height}
+                        color="#d4d4d8" surfaceId="floor"
+                        appliedMaterials={activeMaterials} materialConfigs={materialConfigs}
+                        activePaintMaterial={localActivePaint}
+                        onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }}
+                      />
+                    ))
+                  ) : (
+                    foundationType !== 'slab' && foundationType !== 'slab-on-grade' && (
+                      <>
+                        {shape === 'rectangle' && <FoundationPart x={0} y={foundationHeight} z={0} w={widthIn} h={subfloorThickness} d={lengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />}
+                        {shape === 'l-shape' && (
+                          <>
+                            <FoundationPart x={0} y={foundationHeight} z={0} w={widthIn} h={subfloorThickness} d={lRightDepthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                            <FoundationPart x={0} y={foundationHeight} z={lRightDepthIn} w={lBackWidthIn} h={subfloorThickness} d={lengthIn - lRightDepthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                          </>
+                        )}
+                        {shape === 'u-shape' && (
+                          <>
+                            <FoundationPart x={0} y={foundationHeight} z={0} w={uWallsIn.w7} h={subfloorThickness} d={uWallsIn.w8} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                            <FoundationPart x={uWallsIn.w1 - uWallsIn.w3} y={foundationHeight} z={0} w={uWallsIn.w3} h={subfloorThickness} d={uWallsIn.w2} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                            <FoundationPart x={uWallsIn.w7} y={foundationHeight} z={0} w={uWallsIn.w1 - uWallsIn.w3 - uWallsIn.w7} h={subfloorThickness} d={uWallsIn.w2 - uWallsIn.w4} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                          </>
+                        )}
+                        {shape === 'h-shape' && (
+                          <>
+                            <FoundationPart x={0} y={foundationHeight} z={0} w={hLeftBarWidthIn} h={subfloorThickness} d={lengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                            <FoundationPart x={hLeftBarWidthIn} y={foundationHeight} z={hMiddleBarOffsetIn} w={widthIn - hLeftBarWidthIn - hRightBarWidthIn} h={subfloorThickness} d={hMiddleBarHeightIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                            <FoundationPart x={widthIn - hRightBarWidthIn} y={foundationHeight} z={0} w={hRightBarWidthIn} h={subfloorThickness} d={lengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                          </>
+                        )}
+                        {shape === 't-shape' && (
+                          <>
+                            <FoundationPart x={0} y={foundationHeight} z={0} w={tTopWidthIn} h={subfloorThickness} d={tTopLengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                            <FoundationPart x={(tTopWidthIn - tStemWidthIn) / 2} y={foundationHeight} z={tTopLengthIn} w={tStemWidthIn} h={subfloorThickness} d={tStemLengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                          </>
+                        )}
+                        {shape === 'custom' && (combinedBlocks.length > 0 ? combinedBlocks : shapeBlocks).map(block => (
+                          <FoundationPart key={block.id} x={block.x} y={foundationHeight} z={block.y} w={block.w} h={subfloorThickness} d={block.h} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
+                        ))}
+                      </>
+                    )
                   )}
-                  {shape === 'u-shape' && (
-                    <>
-                      <FoundationPart x={0} y={foundationHeight} z={0} w={uWallsIn.w7} h={subfloorThickness} d={uWallsIn.w8} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                      <FoundationPart x={uWallsIn.w1 - uWallsIn.w3} y={foundationHeight} z={0} w={uWallsIn.w3} h={subfloorThickness} d={uWallsIn.w2} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                      <FoundationPart x={uWallsIn.w7} y={foundationHeight} z={0} w={uWallsIn.w1 - uWallsIn.w3 - uWallsIn.w7} h={subfloorThickness} d={uWallsIn.w2 - uWallsIn.w4} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                    </>
-                  )}
-                  {shape === 'h-shape' && (
-                    <>
-                      <FoundationPart x={0} y={foundationHeight} z={0} w={hLeftBarWidthIn} h={subfloorThickness} d={lengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                      <FoundationPart x={hLeftBarWidthIn} y={foundationHeight} z={hMiddleBarOffsetIn} w={widthIn - hLeftBarWidthIn - hRightBarWidthIn} h={subfloorThickness} d={hMiddleBarHeightIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                      <FoundationPart x={widthIn - hRightBarWidthIn} y={foundationHeight} z={0} w={hRightBarWidthIn} h={subfloorThickness} d={lengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                    </>
-                  )}
-                  {shape === 't-shape' && (
-                    <>
-                      <FoundationPart x={0} y={foundationHeight} z={0} w={tTopWidthIn} h={subfloorThickness} d={tTopLengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                      <FoundationPart x={(tTopWidthIn - tStemWidthIn) / 2} y={foundationHeight} z={tTopLengthIn} w={tStemWidthIn} h={subfloorThickness} d={tStemLengthIn} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                    </>
-                  )}
-                  {shape === 'custom' && (combinedBlocks.length > 0 ? combinedBlocks : shapeBlocks).map(block => (
-                    <FoundationPart key={block.id} x={block.x} y={foundationHeight} z={block.y} w={block.w} h={subfloorThickness} d={block.h} color="#d4d4d8" surfaceId="floor" appliedMaterials={activeMaterials} materialConfigs={materialConfigs} activePaintMaterial={localActivePaint} onSurfacePainted={(sid, url) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); }} />
-                  ))}
                 </group>
               )}
 
               {/* ── Interior floor finish — sits on top of floor system, independently paintable ── */}
-              {addSubfloor && foundationType !== 'slab' && foundationType !== 'slab-on-grade' && (() => {
+              {addSubfloor && (() => {
                 const ffy = foundationHeight + floorSystemHeight; // top of the full floor structure
                 const ffh = 0.5; // thin finish layer (0.5")
                 const ffColor = "#c8b89a"; // warm natural tone — overridden by applied texture
@@ -3809,6 +3907,27 @@ export default function Preview3D({
                   activePaintMaterial: localActivePaint,
                   onSurfacePainted: (sid: string, url: string) => { handleSurfacePainted(sid, url); setActiveSurfaceId(sid); },
                 };
+
+                if (floorBays && floorBays.length > 0) {
+                  return (
+                    <>
+                      {floorBays.filter(bay => {
+                        const bayFoundation = (bay.foundationType && bay.foundationType !== 'default') ? bay.foundationType : foundationType;
+                        return bayFoundation !== 'slab' && bayFoundation !== 'slab-on-grade' && bayFoundation !== 'none';
+                      }).map(bay => (
+                        <FoundationPart
+                          key={`ff-bay-${bay.id}`}
+                          x={bay.x} y={ffy} z={bay.y}
+                          w={bay.width} h={ffh} d={bay.height}
+                          color={ffColor} {...ffPaint}
+                        />
+                      ))}
+                    </>
+                  );
+                }
+
+                if (foundationType === 'slab' || foundationType === 'slab-on-grade') return null;
+
                 if (shape === 'rectangle') return (
                   <FoundationPart key="ff-rect" x={0} y={ffy} z={0} w={widthIn} h={ffh} d={lengthIn} color={ffColor} {...ffPaint} />
                 );
